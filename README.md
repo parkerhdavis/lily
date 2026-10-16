@@ -1,7 +1,7 @@
 ![Lily Icon](./resources/icons/128x128.png)
 # Lily
 
-Legal document drafting and client info management toolset, created custom for an estate-planning law firm.
+Legal document drafting and client info management toolkit, created custom for an estate-planning law firm.
 
 Lily streamlines the process of gathering client information and using it to populate initial drafts of client documents derived from Word documents (.docx/.dotx) templated with a custom syntax, which legal professionals can then polish and supervise to execution. Users select a working directory (typically a client folder), choose a template, and fill in variables; Lily handles copying, previewing, and saving the completed document, which can be edited like any normal Word document and re-opened at any time to adjust variables.
 
