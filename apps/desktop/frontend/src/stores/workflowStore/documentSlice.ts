@@ -95,6 +95,7 @@ function planPathFor(
  */
 async function applyDocumentValues(
 	templatesDir: string,
+	templateRelPath: string,
 	docxPath: string,
 	variables: Record<string, string>,
 	conditionalSchema: Record<string, ConditionalDef[]>,
@@ -104,7 +105,11 @@ async function applyDocumentValues(
 		? planPathFor(templatesDir, templateSchema)
 		: null;
 	if (planPath) {
-		await invoke("render_plan_document", { docxPath, planPath });
+		await invoke("render_plan_document", {
+			docxPath,
+			planPath,
+			skeletonPath: `${templatesDir}/${templateRelPath}`,
+		});
 		return;
 	}
 	await invoke("replace_variables_v2", {
@@ -225,6 +230,7 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 				);
 				await applyDocumentValues(
 					templatesDir,
+					templateRelPath,
 					docPath,
 					variableValues,
 					conditionalSchema,
@@ -337,6 +343,7 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 				);
 				await applyDocumentValues(
 					settings.templates_dir,
+					templateRelPath,
 					docPath,
 					variableValues,
 					conditionalSchema,
@@ -478,6 +485,7 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 			if (settings.templates_dir) {
 				await applyDocumentValues(
 					settings.templates_dir,
+					docTemplateRelPath ?? "",
 					documentPath,
 					variableValues,
 					conditionalSchema,
