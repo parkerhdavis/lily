@@ -31,6 +31,11 @@ scripts/lily plan render --plan "/path/to/plan.json" --client-dir "/path/to/clie
 scripts/lily plan render --plan "/path/to/plan.json" --client-dir "/path/to/client" \
   --skeleton "/path/to/skeleton.docx" --output "/path/to/rendered.docx" --json
 
+# Compile a template into a document plan
+scripts/lily compile --templates-dir "/path/to/Templates" \
+  --template-rel-path "03 - Will Templates/Last Will and Testament Template.docx" \
+  --output "/path/to/plan.json" --json
+
 # Forward to the headless fill harness
 scripts/lily fill --client-dir "/path/to/client" --docx "Template.docx" \
   --templates-dir "/path/to/Templates" \

@@ -108,6 +108,16 @@ pub enum ContentNode {
 		#[serde(default)]
 		format: Option<String>,
 	},
+	Tab {
+		#[serde(default)]
+		tab: bool,
+	},
+	LineBreak {
+		#[serde(default, rename = "line_break")]
+		line_break: bool,
+		#[serde(default)]
+		page: bool,
+	},
 }
 
 /// A reusable piece of legal text.
@@ -494,6 +504,20 @@ fn render_content(
 			}
 			ContentNode::Ref { target, .. } => {
 				warnings.push(format!("Cross-reference not implemented yet: {}", target));
+			}
+			ContentNode::Tab { tab } => {
+				if *tab {
+					output.push_str("<w:r><w:tab/></w:r>");
+				}
+			}
+			ContentNode::LineBreak { line_break, page } => {
+				if *line_break {
+					if *page {
+						output.push_str("<w:r><w:br w:type=\"page\"/></w:r>");
+					} else {
+						output.push_str("<w:r><w:br/></w:r>");
+					}
+				}
 			}
 		}
 	}

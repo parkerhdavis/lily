@@ -38,6 +38,7 @@ REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from run_corpus import extract_document_text, render_snapshot
+import lily_compile
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -401,6 +402,25 @@ def resolve_render_binary() -> Path:
 	return REPO_ROOT / "target" / "debug" / "lily-render"
 
 
+def command_compile(args) -> None:
+	plan, report = lily_compile.compile_template(
+		Path(args.templates_dir), args.template_rel_path
+	)
+	output = Path(args.output).expanduser().resolve()
+	output.parent.mkdir(parents=True, exist_ok=True)
+	output.write_text(json.dumps(plan, indent=2) + "\n")
+
+	if args.json:
+		print(json.dumps(report, indent=2))
+	else:
+		print(f"Compiled {report['template']}")
+		print(
+			f"  {report['blocks']} blocks, {report['clauses']} clauses, {report['slots']} slots"
+		)
+		for warning in report["warnings"]:
+			print(f"  warning: {warning}")
+
+
 def command_plan_render(args) -> None:
 	binary = resolve_render_binary()
 	if not binary.is_file():
@@ -532,6 +552,15 @@ def build_parser() -> argparse.ArgumentParser:
 	plan_render.add_argument("--output", required=True, help="Output .docx path")
 	plan_render.add_argument("--json", action="store_true", help="Print the render report as JSON")
 	plan_render.set_defaults(func=command_plan_render)
+
+	compile_command = subparsers.add_parser(
+		"compile", help="Compile a template into a document plan"
+	)
+	compile_command.add_argument("--templates-dir", required=True)
+	compile_command.add_argument("--template-rel-path", required=True)
+	compile_command.add_argument("--output", required=True)
+	compile_command.add_argument("--json", action="store_true")
+	compile_command.set_defaults(func=command_compile)
 
 	fill = subparsers.add_parser(
 		"fill", help="Forward to the headless lily-fill binary", add_help=False
