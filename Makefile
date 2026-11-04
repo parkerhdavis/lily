@@ -1,6 +1,6 @@
 # ─── Lily Makefile ───
 
-.PHONY: help dev dev-frontend down build build-linux build-windows build-macos notarize setup install lint lint-fix format check test typecheck clean version
+.PHONY: help dev dev-frontend down build build-linux build-windows build-macos notarize setup install lint lint-fix format check test typecheck clean version corpus-update corpus-check
 
 # ─── OS Detection ───
 # On Windows, uname doesn't exist, so we check for Windows-specific env vars first
@@ -483,5 +483,17 @@ clean: ## Remove build artifacts and dependencies
 	@$(RM) target
 	@echo "Cleanup complete"
 endif
+
+# ─── Golden Corpus ───
+# The corpus lives in the private Carelaw repository because its documents
+# carry the firm's legal text. Override CORPUS if it lives elsewhere.
+
+CORPUS ?= $(HOME)/Carelaw/carelaw-lily/Tests
+
+corpus-update: ## Regenerate the golden corpus snapshots
+	@python3 scripts/run_corpus.py --corpus "$(CORPUS)" --update
+
+corpus-check: ## Compare the current engine output to the golden corpus
+	@python3 scripts/run_corpus.py --corpus "$(CORPUS)" --check
 
 .DEFAULT_GOAL := help
