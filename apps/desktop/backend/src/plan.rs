@@ -215,6 +215,42 @@ impl DataView {
 			.count();
 		view.variables
 			.insert("children_count".to_string(), children_count.to_string());
+
+		let has_spouse = view
+			.variables
+			.get("Has Spouse")
+			.map(|value| value == "true")
+			.unwrap_or(false);
+		let spouse_name = view
+			.variables
+			.get("Client Spouse Name")
+			.cloned()
+			.unwrap_or_default();
+		let (term, possessive, verb, have, past, each) = if has_spouse {
+			("Settlors", "Settlors\u{2019}", "are", "have", "were", "each Settlor")
+		} else {
+			("Settlor", "Settlor\u{2019}s", "is", "has", "was", "Settlor")
+		};
+		view.variables
+			.insert("Settlor Term".to_string(), term.to_string());
+		view.variables
+			.insert("Settlor Possessive".to_string(), possessive.to_string());
+		view.variables
+			.insert("Settlor Verb".to_string(), verb.to_string());
+		view.variables
+			.insert("Settlor Have".to_string(), have.to_string());
+		view.variables
+			.insert("Settlor Verb Past".to_string(), past.to_string());
+		view.variables
+			.insert("Settlor Each".to_string(), each.to_string());
+		view.variables.insert(
+			"And Spouse Name".to_string(),
+			if has_spouse {
+				format!(" and {}", spouse_name)
+			} else {
+				String::new()
+			},
+		);
 		view
 	}
 
@@ -517,6 +553,11 @@ fn assign_numbers(
 					section.to_string()
 				};
 				numbers.insert(block.id.clone(), label);
+			}
+			Some("section_local") => {
+				section += 1;
+				subsection = 0;
+				numbers.insert(block.id.clone(), section.to_string());
 			}
 			Some("subsection") => {
 				subsection += 1;
@@ -1272,6 +1313,92 @@ mod tests {
 		assert!(body.contains("<w:tr>"));
 		assert!(body.contains("Alice"));
 		assert!(body.contains("42"));
+	}
+
+	#[test]
+	fn settlor_helpers_follow_spouse_fact() {
+		let mut lily = LilyFile::default();
+		lily.variables
+			.insert("Has Spouse".to_string(), "true".to_string());
+		lily.variables
+			.insert("Client Spouse Name".to_string(), "John B. Doe".to_string());
+		let view = DataView::from_lily(&lily);
+		assert_eq!(view.get("Settlor Term"), Some("Settlors"));
+		assert_eq!(view.get("Settlor Possessive"), Some("Settlors\u{2019}"));
+		assert_eq!(view.get("Settlor Verb"), Some("are"));
+		assert_eq!(view.get("And Spouse Name"), Some(" and John B. Doe"));
+
+		lily.variables
+			.insert("Has Spouse".to_string(), "false".to_string());
+		let view = DataView::from_lily(&lily);
+		assert_eq!(view.get("Settlor Term"), Some("Settlor"));
+		assert_eq!(view.get("Settlor Verb"), Some("is"));
+	}
+
+	#[test]
+	fn section_local_numbering_resets_per_article() {
+		let blocks = vec![
+			test_block(
+				"art-1",
+				"heading",
+				vec![
+					text_node("ARTICLE "),
+					ContentNode::Number {
+						number: "article".to_string(),
+					},
+				],
+				Some("article"),
+			),
+			test_block(
+				"sec-1",
+				"heading",
+				vec![
+					text_node("Section "),
+					ContentNode::Number {
+						number: "section_local".to_string(),
+					},
+				],
+				Some("section_local"),
+			),
+			test_block(
+				"sec-2",
+				"heading",
+				vec![
+					text_node("Section "),
+					ContentNode::Number {
+						number: "section_local".to_string(),
+					},
+				],
+				Some("section_local"),
+			),
+			test_block(
+				"art-2",
+				"heading",
+				vec![
+					text_node("ARTICLE "),
+					ContentNode::Number {
+						number: "article".to_string(),
+					},
+				],
+				Some("article"),
+			),
+			test_block(
+				"sec-1b",
+				"heading",
+				vec![
+					text_node("Section "),
+					ContentNode::Number {
+						number: "section_local".to_string(),
+					},
+				],
+				Some("section_local"),
+			),
+		];
+		let mut warnings = Vec::new();
+		let (body, _) = render_body(&test_plan(blocks), &view(), &mut warnings).unwrap();
+		assert_eq!(body.matches(">1</w:t>").count(), 2);
+		assert_eq!(body.matches(">2</w:t>").count(), 1);
+		assert!(warnings.is_empty());
 	}
 
 	#[test]

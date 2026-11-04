@@ -36,6 +36,11 @@ scripts/lily compile --templates-dir "/path/to/Templates" \
   --template-rel-path "03 - Will Templates/Last Will and Testament Template.docx" \
   --output "/path/to/plan.json" --json
 
+# Compile a raw exemplar that has no template-library entry as literal text
+scripts/lily compile --templates-dir "/path/to/Templates" \
+  --template-rel-path "04 - Trust Templates/Trust Agreement Template.docx" \
+  --output "/path/to/plan.json" --allow-missing-schema
+
 # Forward to the headless fill harness
 scripts/lily fill --client-dir "/path/to/client" --docx "Template.docx" \
   --templates-dir "/path/to/Templates" \

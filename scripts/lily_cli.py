@@ -404,7 +404,9 @@ def resolve_render_binary() -> Path:
 
 def command_compile(args) -> None:
 	plan, report = lily_compile.compile_template(
-		Path(args.templates_dir), args.template_rel_path
+		Path(args.templates_dir),
+		args.template_rel_path,
+		allow_missing_schema=args.allow_missing_schema,
 	)
 	output = Path(args.output).expanduser().resolve()
 	output.parent.mkdir(parents=True, exist_ok=True)
@@ -560,6 +562,11 @@ def build_parser() -> argparse.ArgumentParser:
 	compile_command.add_argument("--template-rel-path", required=True)
 	compile_command.add_argument("--output", required=True)
 	compile_command.add_argument("--json", action="store_true")
+	compile_command.add_argument(
+		"--allow-missing-schema",
+		action="store_true",
+		help="Compile a template that has no template-library entry as literal text",
+	)
 	compile_command.set_defaults(func=command_compile)
 
 	fill = subparsers.add_parser(

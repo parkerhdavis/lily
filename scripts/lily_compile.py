@@ -364,16 +364,24 @@ def paragraph_nodes(
 	return nodes
 
 
-def compile_template(templates_dir: Path, template_rel_path: str) -> tuple[dict, dict]:
+def compile_template(
+	templates_dir: Path,
+	template_rel_path: str,
+	allow_missing_schema: bool = False,
+) -> tuple[dict, dict]:
 	templates_dir = templates_dir.expanduser().resolve()
 	library_path = find_template_library(templates_dir)
 	library = read_json(library_path)
 	entry = library.get("templates", {}).get(template_rel_path)
+	missing_schema = False
 	if entry is None:
-		available = "\n".join(sorted(library.get("templates", {}).keys()))
-		fail(
-			f"Template not found in {library_path}:\n{template_rel_path}\n\nAvailable:\n{available}"
-		)
+		if not allow_missing_schema:
+			available = "\n".join(sorted(library.get("templates", {}).keys()))
+			fail(
+				f"Template not found in {library_path}:\n{template_rel_path}\n\nAvailable:\n{available}"
+			)
+		entry = {"variables": {}}
+		missing_schema = True
 
 	template_path = templates_dir / template_rel_path
 	if not template_path.is_file():
@@ -394,6 +402,8 @@ def compile_template(templates_dir: Path, template_rel_path: str) -> tuple[dict,
 	clauses: dict = {}
 	occurrences: dict = {}
 	warnings: list[str] = []
+	if missing_schema:
+		warnings.append("No template library entry; compiled as literal text.")
 	blocks: list[dict] = []
 
 	for index, child in enumerate(body):
@@ -456,9 +466,18 @@ def main() -> None:
 	parser.add_argument("--template-rel-path", required=True)
 	parser.add_argument("--output", required=True)
 	parser.add_argument("--json", action="store_true")
+	parser.add_argument(
+		"--allow-missing-schema",
+		action="store_true",
+		help="Compile a template that has no template-library entry as literal text",
+	)
 	args = parser.parse_args()
 
-	plan, report = compile_template(Path(args.templates_dir), args.template_rel_path)
+	plan, report = compile_template(
+		Path(args.templates_dir),
+		args.template_rel_path,
+		allow_missing_schema=args.allow_missing_schema,
+	)
 	output = Path(args.output).expanduser().resolve()
 	output.parent.mkdir(parents=True, exist_ok=True)
 	output.write_text(json.dumps(plan, indent=2) + "\n")

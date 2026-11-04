@@ -37,7 +37,11 @@ The compiler captures `bold`, `italic`, `underline`, `caps`, and `small_caps` fr
 
 ## Tables, Images, Cross-References
 
-The compiler warns and skips tables and drawings. The renderer does not support them yet. Cross-references are not inferred; a template that hardcodes an article number keeps the literal text until the Trust work adds numbered block references.
+The compiler warns and skips tables and drawings. The renderer supports table blocks and `number` and `ref` nodes, so article numbering and cross-references are plan-authored; the compiler does not infer them. A table-heavy template needs a manual table plan or a compiler extension before it can migrate cleanly.
+
+## Raw Exemplars
+
+A template with no template-library entry cannot be compiled by default, because the compiler has no variable or conditional schema to work against. Pass `--allow-missing-schema` to compile it as literal text. The result is a starting plan: every paragraph is a block of text, with no slots or clauses. The author then adds slots, terms, conditions, and numbering, and renders the plan against representative client data. This is the path used for the Trust Agreement's first pass from the richest `.dotx` variant.
 
 ## Acceptance Evidence
 

@@ -55,7 +55,8 @@ The golden corpus snapshots are normalized text, so compare the rendered text ag
 ## What It Does Not Do
 
 - It does not infer defined terms. Add terms manually for documents such as the Trust Agreement.
-- It does not support tables, images, or cross-references yet. It warns and skips them.
+- It does not capture tables or images yet. It warns and skips them.
+- It does not infer article numbering or cross-references. Add `numbering` to headings and `number` and `ref` nodes in the plan.
 - It does not edit headers or footers; the renderer replaces simple `lily:` slots there.
 - It does not make legal judgments about clause boundaries or branch correctness. That is the review.
 
