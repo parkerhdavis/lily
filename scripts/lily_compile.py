@@ -405,6 +405,7 @@ def compile_template(
 	if missing_schema:
 		warnings.append("No template library entry; compiled as literal text.")
 	blocks: list[dict] = []
+	paragraph_index = 0
 
 	for index, child in enumerate(body):
 		if child.tag == f"{W}p":
@@ -417,8 +418,10 @@ def compile_template(
 					"content": paragraph_nodes(
 						child, variables, slots, clauses, occurrences, warnings
 					),
+					"source_paragraph": paragraph_index,
 				}
 			)
+			paragraph_index += 1
 		elif child.tag == f"{W}tbl":
 			warnings.append(f"Table at body index {index} skipped")
 

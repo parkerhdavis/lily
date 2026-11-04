@@ -76,6 +76,10 @@ pub struct Block {
 	/// Numbering scheme for this block: "article", "section", or "subsection".
 	#[serde(default)]
 	pub numbering: Option<String>,
+	/// Index of the template paragraph this block came from, used to inherit
+	/// the source paragraph's direct formatting.
+	#[serde(default)]
+	pub source_paragraph: Option<usize>,
 	/// Rows of cells for a table block.
 	#[serde(default)]
 	pub rows: Vec<Vec<TableCell>>,
@@ -89,6 +93,50 @@ pub struct TableCell {
 	pub content: Vec<ContentNode>,
 	#[serde(default)]
 	pub style: String,
+}
+
+/// Direct paragraph and first-run formatting inherited from a source paragraph.
+#[derive(Debug, Clone, Default)]
+pub struct SourceFormatting {
+	pub ppr: String,
+	pub rpr: String,
+}
+
+static SOURCE_PARAGRAPH_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"(?s)<w:p(?:\s[^>]*)?>.*?</w:p>").expect("valid source paragraph regex")
+});
+static SOURCE_PPR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"(?s)<w:pPr>.*?</w:pPr>").expect("valid paragraph properties regex")
+});
+static SOURCE_RUN_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"(?s)<w:r(?:\s[^>]*)?>.*?</w:r>").expect("valid run regex")
+});
+static SOURCE_RPR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"(?s)<w:rPr>.*?</w:rPr>").expect("valid run properties regex")
+});
+static NUM_PR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"(?s)<w:numPr>.*?</w:numPr>").expect("valid numbering properties regex")
+});
+
+/// Extract the direct paragraph properties and first-run properties from a
+/// document body, one entry per paragraph, in document order.
+pub fn extract_source_formatting(document_xml: &str) -> Vec<SourceFormatting> {
+	SOURCE_PARAGRAPH_RE
+		.find_iter(document_xml)
+		.map(|source| {
+			let paragraph = source.as_str();
+			let ppr = SOURCE_PPR_RE
+				.find(paragraph)
+				.map(|matched| matched.as_str().to_string())
+				.unwrap_or_default();
+			let rpr = SOURCE_RUN_RE
+				.find(paragraph)
+				.and_then(|run| SOURCE_RPR_RE.find(run.as_str()))
+				.map(|matched| matched.as_str().to_string())
+				.unwrap_or_default();
+			SourceFormatting { ppr, rpr }
+		})
+		.collect()
 }
 
 /// Inline content inside a block or clause.
@@ -422,9 +470,18 @@ fn escape_xml(text: &str) -> String {
 		.replace('\'', "&apos;")
 }
 
-fn render_run(text: &str, marks: &[String]) -> String {
+fn render_run(text: &str, marks: &[String], run_properties: Option<&str>) -> String {
 	if text.is_empty() {
 		return String::new();
+	}
+	if let Some(properties) = run_properties {
+		if !properties.is_empty() {
+			return format!(
+				"<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>",
+				properties,
+				escape_xml(text)
+			);
+		}
 	}
 	let mut properties = String::new();
 	for mark in marks {
@@ -585,12 +642,17 @@ fn render_content(
 	data: &DataView,
 	numbers: &HashMap<String, String>,
 	current_block: Option<&str>,
+	formatting: Option<&SourceFormatting>,
 	warnings: &mut Vec<String>,
 ) -> Result<String, String> {
 	let mut output = String::new();
 	for node in nodes {
 		match node {
-			ContentNode::Text { text, marks } => output.push_str(&render_run(text, marks)),
+			ContentNode::Text { text, marks } => output.push_str(&render_run(
+				text,
+				marks,
+				formatting.map(|source| source.rpr.as_str()),
+			)),
 			ContentNode::Slot { slot, format, marks } => {
 				let value = data
 					.get(slot)
@@ -613,7 +675,11 @@ fn render_content(
 					}
 				}
 				let effective_format = format.as_deref().or_else(|| infer_format(slot));
-				output.push_str(&render_run(&apply_format(value, effective_format), marks));
+				output.push_str(&render_run(
+					&apply_format(value, effective_format),
+					marks,
+					formatting.map(|source| source.rpr.as_str()),
+				));
 			}
 			ContentNode::Clause { clause, when } => {
 				let definition = plan
@@ -635,6 +701,7 @@ fn render_content(
 						data,
 						numbers,
 						current_block,
+						formatting,
 						warnings,
 					)?);
 				}
@@ -652,17 +719,26 @@ fn render_content(
 						data,
 					),
 					&[],
+					formatting.map(|source| source.rpr.as_str()),
 				));
 			}
 			ContentNode::Ref { target, format } => match numbers.get(target) {
 				Some(number) => {
 					let template = format.as_deref().unwrap_or("{number}");
-					output.push_str(&render_run(&template.replace("{number}", number), &[]));
+					output.push_str(&render_run(
+						&template.replace("{number}", number),
+						&[],
+						formatting.map(|source| source.rpr.as_str()),
+					));
 				}
 				None => warnings.push(format!("Cross-reference target not found: {}", target)),
 			},
 			ContentNode::Number { number } => match current_block.and_then(|id| numbers.get(id)) {
-				Some(value) => output.push_str(&render_run(value, &[])),
+				Some(value) => output.push_str(&render_run(
+					value,
+					&[],
+					formatting.map(|source| source.rpr.as_str()),
+				)),
 				None => warnings.push(format!(
 					"Number '{}' has no assigned value in block {:?}",
 					number, current_block
@@ -670,15 +746,25 @@ fn render_content(
 			},
 			ContentNode::Tab { tab } => {
 				if *tab {
-					output.push_str("<w:r><w:tab/></w:r>");
+					let properties = formatting
+						.map(|source| source.rpr.as_str())
+						.unwrap_or("");
+					if properties.is_empty() {
+						output.push_str("<w:r><w:tab/></w:r>");
+					} else {
+						output.push_str(&format!("<w:r>{}<w:tab/></w:r>", properties));
+					}
 				}
 			}
 			ContentNode::LineBreak { line_break, page } => {
 				if *line_break {
+					let properties = formatting
+						.map(|source| source.rpr.as_str())
+						.unwrap_or("");
 					if *page {
-						output.push_str("<w:r><w:br w:type=\"page\"/></w:r>");
+						output.push_str(&format!("<w:r>{}<w:br w:type=\"page\"/></w:r>", properties));
 					} else {
-						output.push_str("<w:r><w:br/></w:r>");
+						output.push_str(&format!("<w:r>{}<w:br/></w:r>", properties));
 					}
 				}
 			}
@@ -692,25 +778,50 @@ fn render_paragraph(
 	plan: &DocumentPlan,
 	data: &DataView,
 	numbers: &HashMap<String, String>,
+	sources: &[SourceFormatting],
 	warnings: &mut Vec<String>,
 ) -> Result<String, String> {
+	let source_index = block.source_paragraph.or_else(|| {
+		block
+			.id
+			.strip_prefix("block-")
+			.and_then(|value| value.parse::<usize>().ok())
+	});
+	let source = source_index.and_then(|index| sources.get(index));
 	let content = render_content(
 		&block.content,
 		plan,
 		data,
 		numbers,
 		Some(&block.id),
+		source,
 		warnings,
 	)?;
-	let properties = if block.style.is_empty() {
+	let properties = if let Some(source) = source {
+		if !source.ppr.is_empty() {
+			if block.numbering.is_some() {
+				NUM_PR_RE.replace_all(&source.ppr, "").to_string()
+			} else {
+				source.ppr.clone()
+			}
+		} else {
+			style_paragraph(block)
+		}
+	} else {
+		style_paragraph(block)
+	};
+	Ok(format!("<w:p>{}{}</w:p>", properties, content))
+}
+
+fn style_paragraph(block: &Block) -> String {
+	if block.style.is_empty() {
 		String::new()
 	} else {
 		format!(
 			"<w:pPr><w:pStyle w:val=\"{}\"/></w:pPr>",
 			escape_xml(&block.style)
 		)
-	};
-	Ok(format!("<w:p>{}{}</w:p>", properties, content))
+	}
 }
 
 fn render_table(
@@ -738,6 +849,7 @@ fn render_table(
 				data,
 				numbers,
 				Some(&block.id),
+				None,
 				warnings,
 			)?;
 			let properties = if cell.style.is_empty() {
@@ -765,6 +877,7 @@ fn render_table(
 pub fn render_body(
 	plan: &DocumentPlan,
 	data: &DataView,
+	sources: &[SourceFormatting],
 	warnings: &mut Vec<String>,
 ) -> Result<(String, usize), String> {
 	let numbers = assign_numbers(plan, data)?;
@@ -778,7 +891,9 @@ pub fn render_body(
 		}
 		match block.kind.as_str() {
 			"paragraph" | "heading" => {
-				body.push_str(&render_paragraph(block, plan, data, &numbers, warnings)?);
+				body.push_str(&render_paragraph(
+					block, plan, data, &numbers, sources, warnings,
+				)?);
 				count += 1;
 			}
 			"table" => {
@@ -910,11 +1025,23 @@ pub fn render_plan(
 		}
 	}
 
-	let mut warnings = Vec::new();
-	let (body_xml, blocks_rendered) = render_body(&plan, &view, &mut warnings)?;
-
 	let skeleton_bytes = fs::read(skeleton_path)
 		.map_err(|error| format!("Failed to read skeleton {}: {}", skeleton_path.display(), error))?;
+	let sources = {
+		let mut source_archive = ZipArchive::new(Cursor::new(&skeleton_bytes))
+			.map_err(|error| format!("Failed to open skeleton as a docx: {}", error))?;
+		let mut document_xml = String::new();
+		source_archive
+			.by_name("word/document.xml")
+			.map_err(|error| format!("Failed to read skeleton document.xml: {}", error))?
+			.read_to_string(&mut document_xml)
+			.map_err(|error| format!("Failed to read skeleton document.xml: {}", error))?;
+		extract_source_formatting(&document_xml)
+	};
+
+	let mut warnings = Vec::new();
+	let (body_xml, blocks_rendered) = render_body(&plan, &view, &sources, &mut warnings)?;
+
 	let mut archive = ZipArchive::new(Cursor::new(skeleton_bytes))
 		.map_err(|error| format!("Failed to open skeleton as a docx: {}", error))?;
 
@@ -1039,6 +1166,7 @@ mod tests {
 				}],
 				when: None,
 				numbering: None,
+				source_paragraph: None,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
@@ -1046,7 +1174,7 @@ mod tests {
 			terms: HashMap::new(),
 		};
 		let mut warnings = Vec::new();
-		let (body, count) = render_body(&plan, &view(), &mut warnings).unwrap();
+		let (body, count) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
 		assert_eq!(count, 1);
 		assert!(body.contains("Jane A. Doe"));
 		assert!(body.contains("<w:pStyle w:val=\"BodyText\"/>"));
@@ -1071,6 +1199,7 @@ mod tests {
 				}],
 				when: None,
 				numbering: None,
+				source_paragraph: None,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
@@ -1078,7 +1207,7 @@ mod tests {
 			terms: HashMap::new(),
 		};
 		let mut warnings = Vec::new();
-		let (body, _) = render_body(&plan, &view(), &mut warnings).unwrap();
+		let (body, _) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
 		assert!(body.contains("MARY SMITH"));
 	}
 
@@ -1114,6 +1243,7 @@ mod tests {
 				}],
 				when: None,
 				numbering: None,
+				source_paragraph: None,
 				rows: vec![],
 			}],
 			clauses,
@@ -1121,7 +1251,7 @@ mod tests {
 			terms: HashMap::new(),
 		};
 		let mut warnings = Vec::new();
-		let (body, _) = render_body(&plan, &view(), &mut warnings).unwrap();
+		let (body, _) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
 		assert!(body.contains("Second sentence."));
 	}
 
@@ -1180,6 +1310,7 @@ mod tests {
 			content,
 			when: None,
 			numbering: numbering.map(|value| value.to_string()),
+			source_paragraph: None,
 			rows: vec![],
 		}
 	}
@@ -1263,7 +1394,7 @@ mod tests {
 			),
 		];
 		let mut warnings = Vec::new();
-		let (body, _) = render_body(&test_plan(blocks), &view(), &mut warnings).unwrap();
+		let (body, _) = render_body(&test_plan(blocks), &view(), &[], &mut warnings).unwrap();
 		assert!(body.contains("<w:t xml:space=\"preserve\">ARTICLE </w:t>"));
 		assert!(body.contains("<w:t xml:space=\"preserve\">I</w:t>"));
 		assert!(body.contains("<w:t xml:space=\"preserve\">Section </w:t>"));
@@ -1283,6 +1414,7 @@ mod tests {
 			content: vec![],
 			when: None,
 			numbering: None,
+			source_paragraph: None,
 			rows: vec![
 				vec![
 					TableCell {
@@ -1307,7 +1439,7 @@ mod tests {
 			],
 		}];
 		let mut warnings = Vec::new();
-		let (body, count) = render_body(&test_plan(blocks), &view(), &mut warnings).unwrap();
+		let (body, count) = render_body(&test_plan(blocks), &view(), &[], &mut warnings).unwrap();
 		assert_eq!(count, 1);
 		assert!(body.contains("<w:tbl>"));
 		assert!(body.contains("<w:tr>"));
@@ -1395,9 +1527,35 @@ mod tests {
 			),
 		];
 		let mut warnings = Vec::new();
-		let (body, _) = render_body(&test_plan(blocks), &view(), &mut warnings).unwrap();
+		let (body, _) = render_body(&test_plan(blocks), &view(), &[], &mut warnings).unwrap();
 		assert_eq!(body.matches(">1</w:t>").count(), 2);
 		assert_eq!(body.matches(">2</w:t>").count(), 1);
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn source_paragraph_formatting_is_used() {
+		let source = SourceFormatting {
+			ppr: "<w:pPr><w:ind w:left=\"720\"/></w:pPr>".to_string(),
+			rpr: "<w:rPr><w:rFonts w:ascii=\"Times New Roman\"/><w:sz w:val=\"24\"/></w:rPr>"
+				.to_string(),
+		};
+		let block = Block {
+			id: "block-000".to_string(),
+			kind: "paragraph".to_string(),
+			style: String::new(),
+			content: vec![text_node("Hello")],
+			when: None,
+			numbering: None,
+			source_paragraph: Some(0),
+			rows: vec![],
+		};
+		let mut warnings = Vec::new();
+		let (body, _) =
+			render_body(&test_plan(vec![block]), &view(), &[source], &mut warnings).unwrap();
+		assert!(body.contains("w:ind w:left=\"720\""));
+		assert!(body.contains("w:rFonts"));
+		assert!(body.contains("Times New Roman"));
 		assert!(warnings.is_empty());
 	}
 
