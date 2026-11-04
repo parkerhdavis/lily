@@ -189,6 +189,13 @@ impl DataView {
 			view.facts
 				.insert("has_minor_children".to_string(), value == "true");
 		}
+		let children_count = lily
+			.contacts
+			.iter()
+			.filter(|contact| contact.relationship.eq_ignore_ascii_case("Child"))
+			.count();
+		view.variables
+			.insert("children_count".to_string(), children_count.to_string());
 		view
 	}
 
@@ -645,6 +652,18 @@ pub struct RenderReport {
 	pub warnings: Vec<String>,
 }
 
+/// Render a plan over the document copy in place. The document is both the
+/// layout skeleton and the output, which is safe because `render_plan` reads
+/// the skeleton into memory before writing.
+#[tauri::command]
+pub fn render_plan_document(docx_path: String, plan_path: String) -> Result<RenderReport, String> {
+	let path = Path::new(&docx_path);
+	let client_dir = path
+		.parent()
+		.ok_or_else(|| "Document has no parent directory".to_string())?;
+	render_plan(Path::new(&plan_path), client_dir, path, path)
+}
+
 /// Render a plan against a client folder and a layout skeleton.
 pub fn render_plan(
 	plan_path: &Path,
@@ -660,7 +679,19 @@ pub fn render_plan(
 	// Resolve contact-derived variables exactly as the app does before a fill.
 	lily_file::resolve_contact_variables(client_dir.to_string_lossy().to_string())?;
 	let lily = lily_file::read_lily_file(&client_dir.to_string_lossy())?;
-	let view = DataView::from_lily(&lily);
+	let mut view = DataView::from_lily(&lily);
+	if let Some(filename) = skeleton_path.file_name().and_then(|name| name.to_str()) {
+		if let Some(meta) = lily.documents.get(filename) {
+			for (name, value) in &meta.variable_overrides {
+				view.variables.insert(name.clone(), value.clone());
+			}
+			for role_override in meta.role_overrides.values() {
+				for (name, value) in &role_override.values {
+					view.variables.insert(name.clone(), value.clone());
+				}
+			}
+		}
+	}
 
 	let mut warnings = Vec::new();
 	let (body_xml, blocks_rendered) = render_body(&plan, &view, &mut warnings)?;

@@ -80,6 +80,40 @@ async function loadConditionalSchema(
 	}
 }
 
+function planPathFor(
+	templatesDir: string,
+	schema: VariableSchema,
+): string | null {
+	if (schema.engine !== "plan" || !schema.plan_path) return null;
+	return `${templatesDir}/${schema.plan_path}`;
+}
+
+/**
+ * Apply the current values to a document through the engine the template
+ * declares. Plan templates render from their plan; everything else uses the
+ * existing SDT fill path.
+ */
+async function applyDocumentValues(
+	templatesDir: string,
+	docxPath: string,
+	variables: Record<string, string>,
+	conditionalSchema: Record<string, ConditionalDef[]>,
+	templateSchema: VariableSchema | null,
+): Promise<void> {
+	const planPath = templateSchema
+		? planPathFor(templatesDir, templateSchema)
+		: null;
+	if (planPath) {
+		await invoke("render_plan_document", { docxPath, planPath });
+		return;
+	}
+	await invoke("replace_variables_v2", {
+		docxPath,
+		variables,
+		conditionalSchema,
+	});
+}
+
 export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 	loadTemplates: async (templatesDir) => {
 		set({ loading: true, error: null });
@@ -189,11 +223,13 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 					templatesDir,
 					templateRelPath,
 				);
-				await invoke("replace_variables_v2", {
-					docxPath: docPath,
-					variables: variableValues,
+				await applyDocumentValues(
+					templatesDir,
+					docPath,
+					variableValues,
 					conditionalSchema,
-				});
+					templateSchema,
+				);
 			}
 
 			pushNav(get());
@@ -282,29 +318,9 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 			// Sync current values into the .docx so it reflects the
 			// latest questionnaire data without requiring a manual save
 			const settings = useSettingsStore.getState().settings;
-			if (settings.templates_dir && templateRelPath) {
-				const conditionalSchema = await loadConditionalSchema(
-					settings.templates_dir,
-					templateRelPath,
-				);
-				await invoke("replace_variables_v2", {
-					docxPath: docPath,
-					variables: variableValues,
-					conditionalSchema,
-				});
-			}
-
-			const documentHtml = await invoke<string>("get_document_html", {
-				docxPath: docPath,
-			});
-
-			// Load template schema for type-specific inputs
 			let templateSchema: VariableSchema | null = null;
-			try {
-				const settings = await invoke<{ templates_dir: string | null }>(
-					"load_settings",
-				);
-				if (settings.templates_dir) {
+			if (settings.templates_dir && templateRelPath) {
+				try {
 					templateSchema = await invoke<VariableSchema>(
 						"load_template_schema",
 						{
@@ -312,10 +328,25 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 							templateRelPath,
 						},
 					);
+				} catch {
+					// Schema is optional
 				}
-			} catch {
-				// Schema is optional
+				const conditionalSchema = await loadConditionalSchema(
+					settings.templates_dir,
+					templateRelPath,
+				);
+				await applyDocumentValues(
+					settings.templates_dir,
+					docPath,
+					variableValues,
+					conditionalSchema,
+					templateSchema,
+				);
 			}
+
+			const documentHtml = await invoke<string>("get_document_html", {
+				docxPath: docPath,
+			});
 
 			pushNav(get());
 			set({
@@ -388,8 +419,9 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 
 		set({ loading: true, error: null });
 		try {
-			// Load conditional schema from template
+			// Load the template schema and conditional definitions.
 			let conditionalSchema: Record<string, ConditionalDef[]> = {};
+			let templateSchema: VariableSchema | null = null;
 			const settings = useSettingsStore.getState().settings;
 			const docFilename = extractFilename(documentPath);
 			const docTemplateRelPath =
@@ -399,13 +431,18 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 					settings.templates_dir,
 					docTemplateRelPath,
 				);
+				try {
+					templateSchema = await invoke<VariableSchema>(
+						"load_template_schema",
+						{
+							templatesDir: settings.templates_dir,
+							templateRelPath: docTemplateRelPath,
+						},
+					);
+				} catch {
+					// Schema is optional
+				}
 			}
-
-			await invoke("replace_variables_v2", {
-				docxPath: documentPath,
-				variables: variableValues,
-				conditionalSchema,
-			});
 
 			const filename = extractFilename(documentPath);
 			const docMeta = lilyFile?.documents[filename];
@@ -427,6 +464,31 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 						},
 					});
 				}
+			}
+
+			// Plan templates read from the .lily, so persist the current
+			// document values before rendering.
+			if (templateSchema?.engine === "plan" && workingDir) {
+				await invoke("save_client_variables", {
+					workingDir,
+					variableValues,
+				});
+			}
+
+			if (settings.templates_dir) {
+				await applyDocumentValues(
+					settings.templates_dir,
+					documentPath,
+					variableValues,
+					conditionalSchema,
+					templateSchema,
+				);
+			} else {
+				await invoke("replace_variables_v2", {
+					docxPath: documentPath,
+					variables: variableValues,
+					conditionalSchema,
+				});
 			}
 
 			if (workingDir) {

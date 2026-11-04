@@ -4,6 +4,7 @@
 
 mod docx_ops;
 mod lily_file;
+mod plan;
 mod questionnaire;
 mod settings;
 
@@ -29,6 +30,7 @@ use questionnaire::{
     create_questionnaire, delete_questionnaire, duplicate_questionnaire, load_questionnaire,
     load_questionnaire_index, migrate_questionnaires, save_questionnaire,
 };
+use plan::render_plan_document;
 use settings::{load_settings, save_settings};
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -124,6 +126,7 @@ fn main() {
             save_settings,
             list_templates,
             replace_variables_v2,
+            render_plan_document,
             migrate_template_to_sdt,
             load_lily_file_cmd,
             save_variables,

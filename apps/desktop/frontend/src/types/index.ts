@@ -247,6 +247,10 @@ export interface VariableSchemaEntry {
 export interface VariableSchema {
 	lily_type: string;
 	template_filename: string;
+	/** Which fill engine the template uses. Missing means the SDT engine. */
+	engine?: "sdt" | "plan";
+	/** Path to the document plan, relative to the templates directory. */
+	plan_path?: string;
 	variables: Record<string, VariableSchemaEntry>;
 }
 

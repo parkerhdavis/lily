@@ -178,6 +178,14 @@ pub struct VariableSchema {
     pub lily_type: String,
     /// The template filename this schema applies to.
     pub template_filename: String,
+    /// Which fill engine the template uses: "sdt" (the current engine) or
+    /// "plan" (the document-plan renderer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    /// Path to the document plan, relative to the templates directory, when
+    /// `engine` is "plan".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_path: Option<String>,
     /// Map from variable display_name to its schema definition.
     #[serde(default)]
     pub variables: HashMap<String, VariableSchemaEntry>,
@@ -188,6 +196,8 @@ impl Default for VariableSchema {
         Self {
             lily_type: "template-schema".to_string(),
             template_filename: String::new(),
+            engine: None,
+            plan_path: None,
             variables: HashMap::new(),
         }
     }
@@ -1931,6 +1941,12 @@ struct TemplateLibrary {
 /// An entry in the template library for a single template.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TemplateLibraryEntry {
+    /// Which fill engine the template uses. Missing means the SDT engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine: Option<String>,
+    /// Path to the document plan, relative to the templates directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plan_path: Option<String>,
     variables: HashMap<String, VariableSchemaEntry>,
 }
 
@@ -2009,6 +2025,8 @@ pub fn load_template_schema(
         return Ok(VariableSchema {
             lily_type: "template-schema".to_string(),
             template_filename,
+            engine: entry.engine.clone(),
+            plan_path: entry.plan_path.clone(),
             variables: entry.variables.clone(),
         });
     }
@@ -2037,9 +2055,14 @@ pub fn save_template_schema(
     schema: VariableSchema,
 ) -> Result<(), String> {
     let mut library = load_library(&templates_dir);
+    let existing = library.templates.get(&template_rel_path);
+    let engine = existing.and_then(|entry| entry.engine.clone());
+    let plan_path = existing.and_then(|entry| entry.plan_path.clone());
     library.templates.insert(
         template_rel_path,
         TemplateLibraryEntry {
+            engine,
+            plan_path,
             variables: schema.variables,
         },
     );
@@ -2137,6 +2160,8 @@ pub fn migrate_template_to_sdt(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
+        engine: None,
+        plan_path: None,
         variables: HashMap::new(),
     };
 
@@ -2292,9 +2317,14 @@ pub fn migrate_template_to_sdt(
         });
     // Save schema to the template library (not a per-template sidecar)
     let mut library = load_library(&templates_dir);
+    let existing = library.templates.get(&rel_path);
+    let engine = existing.and_then(|entry| entry.engine.clone());
+    let plan_path = existing.and_then(|entry| entry.plan_path.clone());
     library.templates.insert(
         rel_path.clone(),
         TemplateLibraryEntry {
+            engine,
+            plan_path,
             variables: schema.variables,
         },
     );
