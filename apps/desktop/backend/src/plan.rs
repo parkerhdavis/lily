@@ -73,6 +73,22 @@ pub struct Block {
 	pub content: Vec<ContentNode>,
 	#[serde(default)]
 	pub when: Option<Value>,
+	/// Numbering scheme for this block: "article", "section", or "subsection".
+	#[serde(default)]
+	pub numbering: Option<String>,
+	/// Rows of cells for a table block.
+	#[serde(default)]
+	pub rows: Vec<Vec<TableCell>>,
+}
+
+/// One cell in a table block. The content is inline; a cell with multiple
+/// paragraphs can use explicit line breaks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TableCell {
+	#[serde(default)]
+	pub content: Vec<ContentNode>,
+	#[serde(default)]
+	pub style: String,
 }
 
 /// Inline content inside a block or clause.
@@ -104,16 +120,19 @@ pub enum ContentNode {
 		number: Option<String>,
 	},
 	Ref {
+		#[serde(rename = "ref")]
 		target: String,
 		#[serde(default)]
 		format: Option<String>,
 	},
+	Number {
+		number: String,
+	},
 	Tab {
-		#[serde(default)]
 		tab: bool,
 	},
 	LineBreak {
-		#[serde(default, rename = "line_break")]
+		#[serde(rename = "line_break")]
 		line_break: bool,
 		#[serde(default)]
 		page: bool,
@@ -438,10 +457,93 @@ fn resolve_term(
 		.unwrap_or_else(|| term.id.clone())
 }
 
+fn to_roman(mut value: i32) -> String {
+	if value <= 0 {
+		return value.to_string();
+	}
+	const VALUES: &[(i32, &str)] = &[
+		(1000, "M"),
+		(900, "CM"),
+		(500, "D"),
+		(400, "CD"),
+		(100, "C"),
+		(90, "XC"),
+		(50, "L"),
+		(40, "XL"),
+		(10, "X"),
+		(9, "IX"),
+		(5, "V"),
+		(4, "IV"),
+		(1, "I"),
+	];
+	let mut output = String::new();
+	for (number, symbol) in VALUES {
+		while value >= *number {
+			output.push_str(symbol);
+			value -= *number;
+		}
+	}
+	output
+}
+
+fn assign_numbers(
+	plan: &DocumentPlan,
+	data: &DataView,
+) -> Result<HashMap<String, String>, String> {
+	let mut numbers = HashMap::new();
+	let mut article = 0;
+	let mut section = 0;
+	let mut subsection = 0;
+	for block in &plan.blocks {
+		if let Some(condition) = &block.when {
+			if !eval_condition(condition, data)? {
+				continue;
+			}
+		}
+		match block.numbering.as_deref() {
+			None | Some("") => {}
+			Some("article") => {
+				article += 1;
+				section = 0;
+				subsection = 0;
+				numbers.insert(block.id.clone(), to_roman(article));
+			}
+			Some("section") => {
+				section += 1;
+				subsection = 0;
+				let label = if article > 0 {
+					format!("{}.{}", article, section)
+				} else {
+					section.to_string()
+				};
+				numbers.insert(block.id.clone(), label);
+			}
+			Some("subsection") => {
+				subsection += 1;
+				let label = if article > 0 && section > 0 {
+					format!("{}.{}.{}", article, section, subsection)
+				} else {
+					subsection.to_string()
+				};
+				numbers.insert(block.id.clone(), label);
+			}
+			Some(other) => {
+				return Err(format!(
+					"Unknown numbering '{}' in block '{}'",
+					other, block.id
+				))
+			}
+		}
+	}
+	Ok(numbers)
+}
+
 fn render_content(
 	nodes: &[ContentNode],
 	plan: &DocumentPlan,
 	data: &DataView,
+	numbers: &HashMap<String, String>,
+	current_block: Option<&str>,
 	warnings: &mut Vec<String>,
 ) -> Result<String, String> {
 	let mut output = String::new();
@@ -490,6 +592,8 @@ fn render_content(
 						&definition.body,
 						plan,
 						data,
+						numbers,
+						current_block,
 						warnings,
 					)?);
 				}
@@ -509,9 +613,20 @@ fn render_content(
 					&[],
 				));
 			}
-			ContentNode::Ref { target, .. } => {
-				warnings.push(format!("Cross-reference not implemented yet: {}", target));
-			}
+			ContentNode::Ref { target, format } => match numbers.get(target) {
+				Some(number) => {
+					let template = format.as_deref().unwrap_or("{number}");
+					output.push_str(&render_run(&template.replace("{number}", number), &[]));
+				}
+				None => warnings.push(format!("Cross-reference target not found: {}", target)),
+			},
+			ContentNode::Number { number } => match current_block.and_then(|id| numbers.get(id)) {
+				Some(value) => output.push_str(&render_run(value, &[])),
+				None => warnings.push(format!(
+					"Number '{}' has no assigned value in block {:?}",
+					number, current_block
+				)),
+			},
 			ContentNode::Tab { tab } => {
 				if *tab {
 					output.push_str("<w:r><w:tab/></w:r>");
@@ -535,9 +650,17 @@ fn render_paragraph(
 	block: &Block,
 	plan: &DocumentPlan,
 	data: &DataView,
+	numbers: &HashMap<String, String>,
 	warnings: &mut Vec<String>,
 ) -> Result<String, String> {
-	let content = render_content(&block.content, plan, data, warnings)?;
+	let content = render_content(
+		&block.content,
+		plan,
+		data,
+		numbers,
+		Some(&block.id),
+		warnings,
+	)?;
 	let properties = if block.style.is_empty() {
 		String::new()
 	} else {
@@ -549,12 +672,61 @@ fn render_paragraph(
 	Ok(format!("<w:p>{}{}</w:p>", properties, content))
 }
 
+fn render_table(
+	block: &Block,
+	plan: &DocumentPlan,
+	data: &DataView,
+	numbers: &HashMap<String, String>,
+	warnings: &mut Vec<String>,
+) -> Result<String, String> {
+	let style = if block.style.is_empty() {
+		String::new()
+	} else {
+		format!(
+			"<w:tblStyle w:val=\"{}\"/>",
+			escape_xml(&block.style)
+		)
+	};
+	let mut rows = String::new();
+	for row in &block.rows {
+		let mut cells = String::new();
+		for cell in row {
+			let content = render_content(
+				&cell.content,
+				plan,
+				data,
+				numbers,
+				Some(&block.id),
+				warnings,
+			)?;
+			let properties = if cell.style.is_empty() {
+				String::new()
+			} else {
+				format!(
+					"<w:pPr><w:pStyle w:val=\"{}\"/></w:pPr>",
+					escape_xml(&cell.style)
+				)
+			};
+			cells.push_str(&format!(
+				"<w:tc><w:p>{}{}</w:p></w:tc>",
+				properties, content
+			));
+		}
+		rows.push_str(&format!("<w:tr>{}</w:tr>", cells));
+	}
+	Ok(format!(
+		"<w:tbl><w:tblPr>{}<w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>{}</w:tbl>",
+		style, rows
+	))
+}
+
 /// Render the plan's blocks to WordprocessingML body content.
 pub fn render_body(
 	plan: &DocumentPlan,
 	data: &DataView,
 	warnings: &mut Vec<String>,
 ) -> Result<(String, usize), String> {
+	let numbers = assign_numbers(plan, data)?;
 	let mut body = String::new();
 	let mut count = 0;
 	for block in &plan.blocks {
@@ -565,7 +737,11 @@ pub fn render_body(
 		}
 		match block.kind.as_str() {
 			"paragraph" | "heading" => {
-				body.push_str(&render_paragraph(block, plan, data, warnings)?);
+				body.push_str(&render_paragraph(block, plan, data, &numbers, warnings)?);
+				count += 1;
+			}
+			"table" => {
+				body.push_str(&render_table(block, plan, data, &numbers, warnings)?);
 				count += 1;
 			}
 			"page-break" => {
@@ -821,6 +997,8 @@ mod tests {
 					marks: vec![],
 				}],
 				when: None,
+				numbering: None,
+				rows: vec![],
 			}],
 			clauses: HashMap::new(),
 			slots: HashMap::new(),
@@ -851,6 +1029,8 @@ mod tests {
 					marks: vec![],
 				}],
 				when: None,
+				numbering: None,
+				rows: vec![],
 			}],
 			clauses: HashMap::new(),
 			slots: HashMap::new(),
@@ -892,6 +1072,8 @@ mod tests {
 					when: Some(json!({"eq": ["has_spouse", true]})),
 				}],
 				when: None,
+				numbering: None,
+				rows: vec![],
 			}],
 			clauses,
 			slots: HashMap::new(),
@@ -942,5 +1124,162 @@ mod tests {
 			resolve_term(&term, Some("singular"), Some("auto"), &view()),
 			"Settlor"
 		);
+	}
+
+	fn test_block(
+		id: &str,
+		kind: &str,
+		content: Vec<ContentNode>,
+		numbering: Option<&str>,
+	) -> Block {
+		Block {
+			id: id.to_string(),
+			kind: kind.to_string(),
+			style: String::new(),
+			content,
+			when: None,
+			numbering: numbering.map(|value| value.to_string()),
+			rows: vec![],
+		}
+	}
+
+	fn test_plan(blocks: Vec<Block>) -> DocumentPlan {
+		DocumentPlan {
+			lily_type: "document-plan".to_string(),
+			id: "test".to_string(),
+			version: 1,
+			title: String::new(),
+			layout: String::new(),
+			blocks,
+			clauses: HashMap::new(),
+			slots: HashMap::new(),
+			terms: HashMap::new(),
+		}
+	}
+
+	fn text_node(value: &str) -> ContentNode {
+		ContentNode::Text {
+			text: value.to_string(),
+			marks: vec![],
+		}
+	}
+
+	#[test]
+	fn numbering_assigns_articles_sections_and_references() {
+		let blocks = vec![
+			test_block(
+				"art-1",
+				"heading",
+				vec![
+					text_node("ARTICLE "),
+					ContentNode::Number {
+						number: "article".to_string(),
+					},
+				],
+				Some("article"),
+			),
+			test_block(
+				"sec-1-1",
+				"heading",
+				vec![
+					text_node("Section "),
+					ContentNode::Number {
+						number: "section".to_string(),
+					},
+				],
+				Some("section"),
+			),
+			test_block(
+				"ref-art-2",
+				"paragraph",
+				vec![ContentNode::Ref {
+					target: "art-2".to_string(),
+					format: Some("Article {number}".to_string()),
+				}],
+				None,
+			),
+			test_block(
+				"art-2",
+				"heading",
+				vec![
+					text_node("ARTICLE "),
+					ContentNode::Number {
+						number: "article".to_string(),
+					},
+				],
+				Some("article"),
+			),
+			test_block(
+				"sec-2-1",
+				"heading",
+				vec![
+					text_node("Section "),
+					ContentNode::Number {
+						number: "section".to_string(),
+					},
+				],
+				Some("section"),
+			),
+		];
+		let mut warnings = Vec::new();
+		let (body, _) = render_body(&test_plan(blocks), &view(), &mut warnings).unwrap();
+		assert!(body.contains("<w:t xml:space=\"preserve\">ARTICLE </w:t>"));
+		assert!(body.contains("<w:t xml:space=\"preserve\">I</w:t>"));
+		assert!(body.contains("<w:t xml:space=\"preserve\">Section </w:t>"));
+		assert!(body.contains("<w:t xml:space=\"preserve\">1.1</w:t>"));
+		assert!(body.contains("Article II"));
+		assert!(body.contains("<w:t xml:space=\"preserve\">II</w:t>"));
+		assert!(body.contains("<w:t xml:space=\"preserve\">2.1</w:t>"));
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn table_blocks_emit_word_tables() {
+		let blocks = vec![Block {
+			id: "table-1".to_string(),
+			kind: "table".to_string(),
+			style: "TableGrid".to_string(),
+			content: vec![],
+			when: None,
+			numbering: None,
+			rows: vec![
+				vec![
+					TableCell {
+						content: vec![text_node("Name")],
+						style: String::new(),
+					},
+					TableCell {
+						content: vec![text_node("Value")],
+						style: String::new(),
+					},
+				],
+				vec![
+					TableCell {
+						content: vec![text_node("Alice")],
+						style: String::new(),
+					},
+					TableCell {
+						content: vec![text_node("42")],
+						style: String::new(),
+					},
+				],
+			],
+		}];
+		let mut warnings = Vec::new();
+		let (body, count) = render_body(&test_plan(blocks), &view(), &mut warnings).unwrap();
+		assert_eq!(count, 1);
+		assert!(body.contains("<w:tbl>"));
+		assert!(body.contains("<w:tr>"));
+		assert!(body.contains("Alice"));
+		assert!(body.contains("42"));
+	}
+
+	#[test]
+	fn roman_numeral_conversion() {
+		assert_eq!(to_roman(1), "I");
+		assert_eq!(to_roman(4), "IV");
+		assert_eq!(to_roman(9), "IX");
+		assert_eq!(to_roman(14), "XIV");
+		assert_eq!(to_roman(40), "XL");
 	}
 }
