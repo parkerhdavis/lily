@@ -25,6 +25,12 @@ scripts/lily docx text "/path/to/draft.docx" --json
 # Compare two drafts by text and styles; exits 1 when they differ
 scripts/lily docx diff "/path/to/left.docx" "/path/to/right.docx"
 
+# Render a document plan through the deterministic renderer
+scripts/lily plan render --plan "/path/to/plan.json" --client-dir "/path/to/client" \
+  --output "/path/to/rendered.docx"
+scripts/lily plan render --plan "/path/to/plan.json" --client-dir "/path/to/client" \
+  --skeleton "/path/to/skeleton.docx" --output "/path/to/rendered.docx" --json
+
 # Forward to the headless fill harness
 scripts/lily fill --client-dir "/path/to/client" --docx "Template.docx" \
   --templates-dir "/path/to/Templates" \
@@ -39,14 +45,16 @@ scripts/lily doctor --strict
 ## Environment
 
 - `LILY_FILL_BIN` overrides the `lily-fill` path. The default is `target/debug/lily-fill` at the repository root.
+- `LILY_RENDER_BIN` overrides the `lily-render` path. The default is `target/debug/lily-render` at the repository root.
 - `LILY_CORPUS` overrides the golden corpus path. The default is `~/Carelaw/carelaw-lily/Tests`.
 - `LILY_TEMPLATES` overrides the template library path. The default is `~/Carelaw/carelaw-lily/Templates`.
 
-Build the fill harness before using `fill` or `doctor --strict`:
+Build the binaries before using `fill`, `plan render`, or `doctor --strict`:
 
 ```bash
 cd apps/desktop/backend
 cargo build --bin lily-fill
+cargo build --bin lily-render
 ```
 
 ## Notes

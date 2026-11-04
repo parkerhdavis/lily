@@ -394,6 +394,50 @@ def resolve_fill_binary() -> Path:
 	return REPO_ROOT / "target" / "debug" / "lily-fill"
 
 
+def resolve_render_binary() -> Path:
+	override = os.environ.get("LILY_RENDER_BIN")
+	if override:
+		return Path(override).expanduser().resolve()
+	return REPO_ROOT / "target" / "debug" / "lily-render"
+
+
+def command_plan_render(args) -> None:
+	binary = resolve_render_binary()
+	if not binary.is_file():
+		fail(
+			f"lily-render not found: {binary}\n"
+			"Build it with: cargo build --bin lily-render (from apps/desktop/backend)"
+		)
+
+	plan_path = Path(args.plan).expanduser().resolve()
+	if not plan_path.is_file():
+		fail(f"Plan not found: {plan_path}")
+	if args.skeleton:
+		skeleton = str(Path(args.skeleton).expanduser().resolve())
+	else:
+		plan = read_json(plan_path)
+		layout = plan.get("layout")
+		if not layout:
+			fail("Plan has no layout; pass --skeleton")
+		skeleton = str((plan_path.parent / layout).resolve())
+
+	command = [
+		str(binary),
+		"--plan",
+		str(plan_path),
+		"--client-dir",
+		str(Path(args.client_dir).expanduser().resolve()),
+		"--skeleton",
+		skeleton,
+		"--output",
+		str(Path(args.output).expanduser().resolve()),
+	]
+	if args.json:
+		command.append("--json")
+	result = subprocess.run(command)
+	raise SystemExit(result.returncode)
+
+
 def command_fill(forwarded: list[str]) -> None:
 	binary = resolve_fill_binary()
 	if not binary.is_file():
@@ -407,6 +451,7 @@ def command_fill(forwarded: list[str]) -> None:
 
 def command_doctor(args) -> None:
 	fill_binary = resolve_fill_binary()
+	render_binary = resolve_render_binary()
 	corpus = Path(os.environ.get("LILY_CORPUS", "~/Carelaw/carelaw-lily/Tests")).expanduser()
 	templates = Path(
 		os.environ.get("LILY_TEMPLATES", "~/Carelaw/carelaw-lily/Templates")
@@ -415,6 +460,7 @@ def command_doctor(args) -> None:
 	checks = {
 		"python": {"version": sys.version.split()[0], "ok": sys.version_info >= (3, 10)},
 		"lily_fill": {"path": str(fill_binary), "ok": fill_binary.is_file()},
+		"lily_render": {"path": str(render_binary), "ok": render_binary.is_file()},
 		"corpus": {
 			"path": str(corpus),
 			"manifest": str(corpus / "manifest.json"),
@@ -473,6 +519,19 @@ def build_parser() -> argparse.ArgumentParser:
 	docx_diff.add_argument("right")
 	docx_diff.add_argument("--json", action="store_true", help="Print JSON instead of a unified diff")
 	docx_diff.set_defaults(func=command_docx_diff)
+
+	plan = subparsers.add_parser("plan", help="Validate and render document plans")
+	plan_sub = plan.add_subparsers(dest="plan_command", required=True)
+	plan_render = plan_sub.add_parser("render", help="Render a document plan to .docx")
+	plan_render.add_argument("--plan", required=True, help="Path to the plan JSON")
+	plan_render.add_argument("--client-dir", required=True, help="Client folder containing the .lily file")
+	plan_render.add_argument(
+		"--skeleton",
+		help="Layout skeleton .docx; defaults to the plan's layout path",
+	)
+	plan_render.add_argument("--output", required=True, help="Output .docx path")
+	plan_render.add_argument("--json", action="store_true", help="Print the render report as JSON")
+	plan_render.set_defaults(func=command_plan_render)
 
 	fill = subparsers.add_parser(
 		"fill", help="Forward to the headless lily-fill binary", add_help=False
