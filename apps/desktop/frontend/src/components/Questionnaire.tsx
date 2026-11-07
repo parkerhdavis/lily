@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AssignmentPicker from "@/components/AssignmentPicker";
 import ContactListPicker from "@/components/ContactListPicker";
 import ContactPicker from "@/components/ContactPicker";
 import QuestionnaireChooser, {
@@ -1088,7 +1089,11 @@ function QuestionField({
 				/>
 			);
 		case "contact-role":
-			return <ContactPicker question={question} />;
+			return question.multiple ? (
+				<AssignmentPicker question={question} />
+			) : (
+				<ContactPicker question={question} />
+			);
 		case "contact-list":
 			return <ContactListPicker question={question} />;
 	}

@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-use crate::lily_file::{self, LilyFile};
+use crate::lily_file::{self, Contact, LilyFile, RoleAssignment};
 
 static SDT_RE: LazyLock<regex::Regex> =
 	LazyLock::new(|| regex::Regex::new(r"(?s)<w:sdt>.*?</w:sdt>").expect("valid sdt regex"));
@@ -216,6 +216,27 @@ pub enum ContentNode {
 		#[serde(default)]
 		marks: Vec<String>,
 	},
+	Role {
+		role: String,
+		#[serde(default)]
+		when: Option<Value>,
+		#[serde(default)]
+		property: Option<String>,
+		#[serde(default)]
+		intro: Option<String>,
+		#[serde(default)]
+		shared_intro: Option<String>,
+		#[serde(default)]
+		successor: Option<String>,
+		#[serde(default)]
+		conjunction: Option<String>,
+		#[serde(default)]
+		separator: Option<String>,
+		#[serde(default)]
+		oxford: Option<bool>,
+		#[serde(default)]
+		marks: Vec<String>,
+	},
 	Clause {
 		clause: String,
 		#[serde(default)]
@@ -292,6 +313,50 @@ pub struct DataView {
 	pub variables: HashMap<String, String>,
 	pub facts: HashMap<String, bool>,
 	pub lists: HashMap<String, Vec<String>>,
+	pub contacts: HashMap<String, Contact>,
+	pub roles: HashMap<String, Vec<RoleAssignment>>,
+}
+
+/// Convert one legacy single-contact or contact-list binding into an
+/// assignment. Manual ("Other") values are read from the client variables.
+fn binding_assignment(
+	binding: &lily_file::ContactBinding,
+	variables: &HashMap<String, String>,
+) -> Option<RoleAssignment> {
+	if let Some(ids) = &binding.contact_ids {
+		if !ids.is_empty() {
+			return Some(RoleAssignment {
+				contact_ids: ids.clone(),
+				values: HashMap::new(),
+			});
+		}
+	}
+	if let Some(id) = &binding.contact_id {
+		if id != "__none__" && !id.is_empty() {
+			return Some(RoleAssignment {
+				contact_ids: vec![id.clone()],
+				values: HashMap::new(),
+			});
+		}
+		return None;
+	}
+	if !binding.variable_mappings.is_empty() {
+		let mut values = HashMap::new();
+		for (variable, property) in &binding.variable_mappings {
+			if let Some(value) = variables.get(variable) {
+				if !value.is_empty() {
+					values.insert(property.clone(), value.clone());
+				}
+			}
+		}
+		if !values.is_empty() {
+			return Some(RoleAssignment {
+				contact_ids: Vec::new(),
+				values,
+			});
+		}
+	}
+	None
 }
 
 impl DataView {
@@ -300,7 +365,41 @@ impl DataView {
 			variables: lily.variables.clone(),
 			facts: HashMap::new(),
 			lists: HashMap::new(),
+			contacts: lily
+				.contacts
+				.iter()
+				.map(|contact| (contact.id.clone(), contact.clone()))
+				.collect(),
+			roles: HashMap::new(),
 		};
+		for (role, binding) in &lily.contact_bindings {
+			let assignments = match &binding.assignments {
+				Some(assignments) => assignments.clone(),
+				None => binding_assignment(binding, &lily.variables)
+					.into_iter()
+					.collect(),
+			};
+			if assignments.iter().any(|assignment| {
+				!assignment.contact_ids.is_empty() || !assignment.values.is_empty()
+			}) {
+				view.roles.insert(role.clone(), assignments);
+			}
+		}
+		// Older client files bind the trustee tiers to separate roles. Treat
+		// them as the ordered list for the merged Successor Trustee role.
+		if !view.roles.contains_key("Successor Trustee") {
+			let mut assignments = Vec::new();
+			for role in ["Primary Trustee", "Secondary Trustee", "Tertiary Trustee"] {
+				if let Some(binding) = lily.contact_bindings.get(role) {
+					if let Some(assignment) = binding_assignment(binding, &lily.variables) {
+						assignments.push(assignment);
+					}
+				}
+			}
+			if !assignments.is_empty() {
+				view.roles.insert("Successor Trustee".to_string(), assignments);
+			}
+		}
 		view.lists.insert(
 			"required_documents".to_string(),
 			lily.required_documents
@@ -308,12 +407,15 @@ impl DataView {
 				.map(|document| document.template_rel_path.clone())
 				.collect(),
 		);
-		for (key, value) in &view.variables {
-			if value == "true" || value == "false" {
-				let fact = value == "true";
-				view.facts.insert(key.clone(), fact);
-				view.facts.insert(snake_case(key), fact);
-			}
+		let variable_facts: Vec<(String, bool)> = view
+			.variables
+			.iter()
+			.filter(|(_, value)| value.as_str() == "true" || value.as_str() == "false")
+			.map(|(key, value)| (key.clone(), value == "true"))
+			.collect();
+		for (key, fact) in variable_facts {
+			view.facts.insert(key.clone(), fact);
+			view.facts.insert(snake_case(&key), fact);
 		}
 		if let Some(value) = view.variables.get("Has Spouse") {
 			view.facts.insert("has_spouse".to_string(), value == "true");
@@ -370,6 +472,36 @@ impl DataView {
 			},
 		);
 		view
+	}
+
+	/// Resolve a role into ordered groups of names. A group with more than one
+	/// name is a shared assignment; each group is a successor tier.
+	pub fn role_names(&self, role: &str, property: &str) -> Vec<Vec<String>> {
+		self.roles
+			.get(role)
+			.map(|assignments| {
+				assignments
+					.iter()
+					.filter_map(|assignment| {
+						let names: Vec<String> = assignment
+							.contact_ids
+							.iter()
+							.filter_map(|id| self.contacts.get(id))
+							.map(|contact| lily_file::contact_property(contact, property))
+							.filter(|name| !name.is_empty())
+							.collect();
+						if !names.is_empty() {
+							return Some(names);
+						}
+						assignment
+							.values
+							.get(property)
+							.filter(|value| !value.is_empty())
+							.map(|value| vec![value.clone()])
+					})
+					.collect()
+			})
+			.unwrap_or_default()
 	}
 
 	pub fn get(&self, name: &str) -> Option<&str> {
@@ -724,6 +856,99 @@ fn assign_numbers(
 	Ok(numbers)
 }
 
+/// Join names for one assignment: "A", "A and B", or "A, B, and C".
+fn join_names(names: &[String], conjunction: &str, separator: &str, oxford: bool) -> String {
+	match names {
+		[] => String::new(),
+		[name] => name.clone(),
+		[first, second] => format!("{}{}{}", first, conjunction_separator(conjunction), second),
+		many => {
+			let head = many[..many.len() - 1].join(separator);
+			let last = many.last().expect("nonempty");
+			if oxford {
+				format!("{}{}{}{}", head, separator, conjunction, last)
+			} else {
+				format!("{}{}{}", head, conjunction_separator(conjunction), last)
+			}
+		}
+	}
+}
+
+fn conjunction_separator(conjunction: &str) -> &'static str {
+	// The conjunction is a word; the space before and after it is layout, not
+	// data, so keep the common case readable.
+	match conjunction {
+		"and" => " and ",
+		"or" => " or ",
+		_ => " and ",
+	}
+}
+
+/// Resolve an ordered role into text. The plan supplies the legal wording for
+/// the first assignment, a shared first assignment, and each successor tier.
+struct RoleWording<'a> {
+	property: &'a str,
+	intro: Option<&'a str>,
+	shared_intro: Option<&'a str>,
+	successor: Option<&'a str>,
+	conjunction: &'a str,
+	separator: &'a str,
+	oxford: bool,
+}
+
+fn render_role(
+	role: &str,
+	wording: RoleWording<'_>,
+	data: &DataView,
+	warnings: &mut Vec<String>,
+) -> String {
+	let RoleWording {
+		property,
+		intro,
+		shared_intro,
+		successor,
+		conjunction,
+		separator,
+		oxford,
+	} = wording;
+	let groups = data.role_names(role, property);
+	if groups.is_empty() {
+		warnings.push(format!("No assignment for role: {}", role));
+		return String::new();
+	}
+	let mut output = String::new();
+	let mut previous: Option<String> = None;
+	for (index, names) in groups.iter().enumerate() {
+		let joined = join_names(names, conjunction, separator, oxford);
+		let template = if index == 0 {
+			if names.len() > 1 {
+				shared_intro.or(intro)
+			} else {
+				intro
+			}
+		} else {
+			successor
+		};
+		match template {
+			Some(template) => {
+				let text = template
+					.replace("{names}", &joined)
+					.replace("{previous}", previous.as_deref().unwrap_or(""))
+					.replace("{role}", role);
+				output.push_str(&text);
+			}
+			None => {
+				if index > 0 && !output.ends_with(' ') {
+					output.push(' ');
+				}
+				output.push_str(&joined);
+			}
+		}
+		previous = Some(joined);
+	}
+	output
+}
+
 fn render_content(
 	nodes: &[ContentNode],
 	plan: &DocumentPlan,
@@ -765,6 +990,45 @@ fn render_content(
 				let effective_format = format.as_deref().or_else(|| infer_format(slot));
 				output.push_str(&render_run(
 					&apply_format(value, effective_format),
+					marks,
+					formatting.map(|source| source.rpr.as_str()),
+				));
+			}
+			ContentNode::Role {
+				role,
+				when,
+				property,
+				intro,
+				shared_intro,
+				successor,
+				conjunction,
+				separator,
+				oxford,
+				marks,
+			} => {
+				let enabled = match when {
+					Some(condition) => eval_condition(condition, data)?,
+					None => true,
+				};
+				if !enabled {
+					continue;
+				}
+				let text = render_role(
+					role,
+					RoleWording {
+						property: property.as_deref().unwrap_or("full_name"),
+						intro: intro.as_deref(),
+						shared_intro: shared_intro.as_deref(),
+						successor: successor.as_deref(),
+						conjunction: conjunction.as_deref().unwrap_or("and"),
+						separator: separator.as_deref().unwrap_or(", "),
+						oxford: oxford.unwrap_or(true),
+					},
+					data,
+					warnings,
+				);
+				output.push_str(&render_run(
+					&text,
 					marks,
 					formatting.map(|source| source.rpr.as_str()),
 				));
@@ -1324,6 +1588,44 @@ fn resolve_segments(
 				let effective_format = format.as_deref().or_else(|| infer_format(slot));
 				segments.push(Segment::Text {
 					text: apply_format(value, effective_format),
+					marks: marks.clone(),
+				});
+			}
+			ContentNode::Role {
+				role,
+				when,
+				property,
+				intro,
+				shared_intro,
+				successor,
+				conjunction,
+				separator,
+				oxford,
+				marks,
+			} => {
+				let enabled = match when {
+					Some(condition) => eval_condition(condition, data)?,
+					None => true,
+				};
+				if !enabled {
+					continue;
+				}
+				let text = render_role(
+					role,
+					RoleWording {
+						property: property.as_deref().unwrap_or("full_name"),
+						intro: intro.as_deref(),
+						shared_intro: shared_intro.as_deref(),
+						successor: successor.as_deref(),
+						conjunction: conjunction.as_deref().unwrap_or("and"),
+						separator: separator.as_deref().unwrap_or(", "),
+						oxford: oxford.unwrap_or(true),
+					},
+					data,
+					warnings,
+				);
+				segments.push(Segment::Text {
+					text,
 					marks: marks.clone(),
 				});
 			}
@@ -2049,6 +2351,8 @@ pub struct PlanAudit {
     pub conditions: Vec<AuditCondition>,
     pub terms: Vec<String>,
     pub refs: Vec<String>,
+    pub roles: Vec<String>,
+    pub missing_roles: Vec<String>,
 }
 
 fn condition_names(condition: &Value, names: &mut Vec<String>) {
@@ -2089,6 +2393,7 @@ fn collect_audit_nodes(
     used_slots: &mut Vec<String>,
     terms: &mut Vec<String>,
     refs: &mut Vec<String>,
+    roles: &mut Vec<String>,
     conditions: &mut Vec<(String, Value)>,
     visited_clauses: &mut HashSet<String>,
 ) {
@@ -2115,10 +2420,16 @@ fn collect_audit_nodes(
                             used_slots,
                             terms,
                             refs,
+                            roles,
                             conditions,
                             visited_clauses,
                         );
                     }
+                }
+            }
+            ContentNode::Role { role, .. } => {
+                if !roles.contains(role) {
+                    roles.push(role.clone());
                 }
             }
             ContentNode::Term { term, .. } => {
@@ -2140,6 +2451,7 @@ pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
     let mut used_slots: Vec<String> = Vec::new();
     let mut terms: Vec<String> = Vec::new();
     let mut refs: Vec<String> = Vec::new();
+    let mut roles: Vec<String> = Vec::new();
     let mut conditions: Vec<(String, Value)> = Vec::new();
     let mut visited_clauses: HashSet<String> = HashSet::new();
     for block in &plan.blocks {
@@ -2153,6 +2465,7 @@ pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
             &mut used_slots,
             &mut terms,
             &mut refs,
+            &mut roles,
             &mut conditions,
             &mut visited_clauses,
         );
@@ -2161,6 +2474,13 @@ pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
     used_slots.dedup();
     terms.sort();
     refs.sort();
+    roles.sort();
+    roles.dedup();
+    let missing_roles: Vec<String> = roles
+        .iter()
+        .filter(|role| data.role_names(role, "full_name").is_empty())
+        .cloned()
+        .collect();
 
     let mut declared: Vec<String> = plan.slots.keys().cloned().collect();
     declared.sort();
@@ -2256,6 +2576,8 @@ pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
         conditions: audit_conditions,
         terms,
         refs,
+        roles,
+        missing_roles,
     }
 }
 
@@ -2498,6 +2820,124 @@ mod tests {
 		lily.variables
 			.insert("Primary HPOA Agent Full Name".to_string(), "Mary Smith".to_string());
 		DataView::from_lily(&lily)
+	}
+
+	fn role_contact(id: &str, name: &str) -> Contact {
+		Contact {
+			id: id.to_string(),
+			full_name: name.to_string(),
+			first_name: name.split_whitespace().next().unwrap_or(name).to_string(),
+			middle_name: String::new(),
+			last_name: name.split_whitespace().last().unwrap_or(name).to_string(),
+			relationship: "Friend".to_string(),
+			other_relationship: String::new(),
+			phone: String::new(),
+			email: String::new(),
+			address: String::new(),
+			city: String::new(),
+			state: String::new(),
+			zip: String::new(),
+			is_minor: false,
+		}
+	}
+
+	fn role_view() -> DataView {
+		let mut lily = LilyFile::default();
+		lily.contacts = vec![
+			role_contact("a", "Alice Adams"),
+			role_contact("b", "Bob Brown"),
+			role_contact("c", "Carol Clark"),
+		];
+		lily.contact_bindings.insert(
+			"Successor Trustee".to_string(),
+			crate::lily_file::ContactBinding {
+				contact_id: None,
+				variable_mappings: HashMap::new(),
+				contact_ids: None,
+				assignments: Some(vec![
+					RoleAssignment {
+						contact_ids: vec!["a".to_string(), "b".to_string()],
+						values: HashMap::new(),
+					},
+					RoleAssignment {
+						contact_ids: vec!["c".to_string()],
+						values: HashMap::new(),
+					},
+				]),
+			},
+		);
+		DataView::from_lily(&lily)
+	}
+
+	#[test]
+	fn role_assignments_join_shared_groups_and_successors() {
+		let view = role_view();
+		let mut warnings = Vec::new();
+		let text = render_role(
+			"Successor Trustee",
+			RoleWording {
+				property: "full_name",
+				intro: Some("Settlors nominate {names} to serve as Trustee. "),
+				shared_intro: Some(
+					"Settlors nominate {names} to serve as Co-Trustees. ",
+				),
+				successor: Some(
+					"If {previous} shall die, resign, or cease to act, {names} shall serve as Trustee. ",
+				),
+				conjunction: "and",
+				separator: ", ",
+				oxford: true,
+			},
+			&view,
+			&mut warnings,
+		);
+		assert_eq!(
+			text,
+			"Settlors nominate Alice Adams and Bob Brown to serve as Co-Trustees. If Alice Adams and Bob Brown shall die, resign, or cease to act, Carol Clark shall serve as Trustee. "
+		);
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn legacy_contact_binding_is_one_role_assignment() {
+		let mut lily = LilyFile::default();
+		lily.contacts = vec![role_contact("a", "Alice Adams")];
+		lily.contact_bindings.insert(
+			"Primary Trustee".to_string(),
+			crate::lily_file::ContactBinding {
+				contact_id: Some("a".to_string()),
+				variable_mappings: HashMap::new(),
+				contact_ids: None,
+				assignments: None,
+			},
+		);
+		let view = DataView::from_lily(&lily);
+		assert_eq!(
+			view.role_names("Primary Trustee", "full_name"),
+			vec![vec!["Alice Adams".to_string()]]
+		);
+	}
+
+	#[test]
+	fn missing_role_reports_a_warning() {
+		let view = DataView::default();
+		let mut warnings = Vec::new();
+		let text = render_role(
+			"Successor Trustee",
+			RoleWording {
+				property: "full_name",
+				intro: Some("Settlors nominate {names}. "),
+				shared_intro: None,
+				successor: Some("If {previous} ceases to act, {names} shall serve. "),
+				conjunction: "and",
+				separator: ", ",
+				oxford: true,
+			},
+			&view,
+			&mut warnings,
+		);
+		assert!(text.is_empty());
+		assert_eq!(warnings, vec!["No assignment for role: Successor Trustee"]);
 	}
 
 	#[test]

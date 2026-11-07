@@ -835,6 +835,20 @@ function ContactRoleQuestionFields({
 				/>
 			</div>
 
+			<label className="label cursor-pointer justify-start gap-2 py-0">
+				<input
+					type="checkbox"
+					className="checkbox checkbox-xs"
+					checked={Boolean(question.multiple)}
+					onChange={(e) =>
+						onUpdate((q) => ({ ...q, multiple: e.target.checked }))
+					}
+				/>
+				<span className="label-text text-xs text-base-content/60">
+					Ordered assignments
+				</span>
+			</label>
+
 			{/* Variable mappings */}
 			{entries.length > 0 && (
 				<div className="pl-4 space-y-1">

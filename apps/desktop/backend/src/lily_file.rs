@@ -66,6 +66,17 @@ pub struct Contact {
 /// from variable display names to contact property keys. When a contact is
 /// selected for a role, the mapped variables auto-fill from the contact's
 /// properties.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RoleAssignment {
+    /// One person or a shared group. A single ID is a single assignment;
+    /// several IDs are people who serve together.
+    #[serde(default)]
+    pub contact_ids: Vec<String>,
+    /// Manual values for this assignment, keyed by contact property name.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub values: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContactBinding {
     /// The contact ID this role is bound to, or `None` for manual ("Other") entry.
@@ -81,6 +92,30 @@ pub struct ContactBinding {
     /// ordinary single-contact bindings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact_ids: Option<Vec<String>>,
+    /// Ordered assignments for a role that can be held in succession. Each
+    /// assignment is one person or a shared group. When absent, the single
+    /// `contact_id` or `contact_ids` shape is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignments: Option<Vec<RoleAssignment>>,
+}
+
+/// Read one property from a contact.
+pub fn contact_property(contact: &Contact, property: &str) -> String {
+    match property {
+        "full_name" => contact.full_name.clone(),
+        "first_name" => contact.first_name.clone(),
+        "middle_name" => contact.middle_name.clone(),
+        "last_name" => contact.last_name.clone(),
+        "relationship" => contact.relationship.clone(),
+        "other_relationship" => contact.other_relationship.clone(),
+        "phone" => contact.phone.clone(),
+        "email" => contact.email.clone(),
+        "address" => contact.address.clone(),
+        "city" => contact.city.clone(),
+        "state" => contact.state.clone(),
+        "zip" => contact.zip.clone(),
+        _ => String::new(),
+    }
 }
 
 /// Status of a required document in the client workflow.
@@ -806,6 +841,45 @@ pub fn resolve_contact_variables(working_dir: String) -> Result<Vec<String>, Str
     // ── Pass 1: Role-based conditionals ("Has {role}") ──────────────────
     for (role, binding) in &lily.contact_bindings {
         let has_key = format!("Has {}", role);
+
+        // Ordered assignments supersede the single-contact shape. A role is
+        // present when any assignment names someone or carries a manual value.
+        // The first assignment also fills the legacy mapped variables so a
+        // plan that has not moved to a role node still renders.
+        if let Some(assignments) = &binding.assignments {
+            let filled = assignments.iter().any(|assignment| {
+                !assignment.contact_ids.is_empty()
+                    || assignment.values.values().any(|value| !value.is_empty())
+            });
+            lily.variables.insert(
+                has_key,
+                if filled { "true" } else { "false" }.to_string(),
+            );
+            if !filled {
+                for var_name in binding.variable_mappings.keys() {
+                    lily.variables.insert(var_name.clone(), String::new());
+                }
+            }
+            if let Some(first) = assignments.first() {
+                for (var_name, prop_key) in &binding.variable_mappings {
+                    let value = first
+                        .values
+                        .get(prop_key)
+                        .cloned()
+                        .or_else(|| {
+                            first.contact_ids.first().and_then(|id| {
+                                lily.contacts
+                                    .iter()
+                                    .find(|contact| &contact.id == id)
+                                    .map(|contact| get_contact_property(contact, prop_key))
+                            })
+                        })
+                        .unwrap_or_default();
+                    lily.variables.insert(var_name.clone(), value);
+                }
+            }
+            continue;
+        }
 
         // Contact-list bindings aggregate several contacts into one variable.
         // The single `variable_mappings` entry maps the target variable → the
@@ -2232,6 +2306,7 @@ mod tests {
             contact_id: Some("john-id".into()),
             variable_mappings: HashMap::new(),
             contact_ids: None,
+            assignments: None,
         };
         spouse_binding
             .variable_mappings
@@ -2243,6 +2318,7 @@ mod tests {
             contact_id: Some("kid-id".into()),
             variable_mappings: HashMap::new(),
             contact_ids: None,
+            assignments: None,
         };
         other_binding
             .variable_mappings

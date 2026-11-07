@@ -600,6 +600,7 @@ def expand_excerpts(
 
 def collect_plan_references(plan: dict) -> dict:
 	slots: list[str] = []
+	roles: set[str] = set()
 	clause_refs: set[str] = set()
 	terms: set[str] = set()
 	refs: list[str] = []
@@ -609,6 +610,8 @@ def collect_plan_references(plan: dict) -> dict:
 		if isinstance(node, dict):
 			if isinstance(node.get("slot"), str):
 				slots.append(node["slot"])
+			if isinstance(node.get("role"), str):
+				roles.add(node["role"])
 			if isinstance(node.get("clause"), str):
 				clause_refs.add(node["clause"])
 			if isinstance(node.get("term"), str):
@@ -634,6 +637,7 @@ def collect_plan_references(plan: dict) -> dict:
 			conditions.append((f"clause:{clause_id}", clause["when"]))
 	return {
 		"slots": slots,
+		"roles": sorted(roles),
 		"clause_refs": sorted(clause_refs),
 		"terms": sorted(terms),
 		"refs": refs,
@@ -653,8 +657,45 @@ def computed_slot(name: str) -> bool:
 	)
 
 
-def audit_plan(plan: dict, variables: dict, lists: dict) -> dict:
+def client_role_names(client: dict) -> dict[str, list[str]]:
+	contacts = {contact.get("id"): contact for contact in client.get("contacts", [])}
+	roles: dict[str, list[str]] = {}
+	for role, binding in client.get("contact_bindings", {}).items():
+		names: list[str] = []
+		assignments = binding.get("assignments") or []
+		for assignment in assignments:
+			for contact_id in assignment.get("contact_ids", []):
+				contact = contacts.get(contact_id)
+				if contact and contact.get("full_name"):
+					names.append(contact["full_name"])
+			for value in assignment.get("values", {}).values():
+				if value:
+					names.append(value)
+		if not assignments:
+			contact_ids = binding.get("contact_ids") or []
+			for contact_id in contact_ids:
+				contact = contacts.get(contact_id)
+				if contact and contact.get("full_name"):
+					names.append(contact["full_name"])
+			contact_id = binding.get("contact_id")
+			if contact_id and contact_id != "__none__":
+				contact = contacts.get(contact_id)
+				if contact and contact.get("full_name"):
+					names.append(contact["full_name"])
+		if not names:
+			for variable in binding.get("variable_mappings", {}):
+				value = client.get("variables", {}).get(variable)
+				if value:
+					names.append(value)
+		if names:
+			roles[role] = names
+	return roles
+
+
+def audit_plan(plan: dict, variables: dict, lists: dict, roles: dict[str, list[str]] | None = None) -> dict:
 	references = collect_plan_references(plan)
+	roles = roles or {}
+	missing_roles = [role for role in references["roles"] if not roles.get(role)]
 	declared = plan.get("slots", {})
 	used = sorted(set(references["slots"]))
 	condition_names: set[str] = set()
@@ -713,6 +754,8 @@ def audit_plan(plan: dict, variables: dict, lists: dict) -> dict:
 		"terms": references["terms"],
 		"refs": sorted(set(references["refs"])),
 		"clause_refs": references["clause_refs"],
+		"roles": references["roles"],
+		"missing_roles": missing_roles,
 	}
 
 
@@ -723,8 +766,9 @@ def command_plan_audit(args) -> None:
 	plan = read_json(plan_path)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
 	variables, lists = audit_variables(client)
+	roles = client_role_names(client)
 	plan = expand_excerpts(plan, plan_path.parent, variables, lists)
-	report = audit_plan(plan, variables, lists)
+	report = audit_plan(plan, variables, lists, roles)
 	report["client"] = str(client_path)
 	if args.json:
 		print(json.dumps(report, indent=2))
@@ -749,6 +793,12 @@ def command_plan_audit(args) -> None:
 			print(f"  - {entry['name']} ({required}, {entry['kind']})")
 	else:
 		print("Empty values: none")
+	if report["missing_roles"]:
+		print("Unassigned roles:")
+		for role in report["missing_roles"]:
+			print(f"  - {role}")
+	else:
+		print("Unassigned roles: none")
 	print("Conditions:")
 	for entry in report["conditions"]:
 		result = {True: "true", False: "false", None: "unknown"}[entry["result"]]
@@ -819,8 +869,12 @@ def command_draft(args) -> None:
 	plan = read_json(plan_path)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
 	variables, lists = audit_variables(client)
+	roles = client_role_names(client)
 	audit = audit_plan(
-		expand_excerpts(plan, plan_path.parent, variables, lists), variables, lists
+		expand_excerpts(plan, plan_path.parent, variables, lists),
+		variables,
+		lists,
+		roles,
 	)
 	skeleton = plan_skeleton(plan_path, plan, args.skeleton)
 
@@ -855,6 +909,8 @@ def command_draft(args) -> None:
 				"Condition has an unknown value: "
 				f"{condition['where']} {json.dumps(condition['condition'], ensure_ascii=False)}"
 			)
+	for role in audit["missing_roles"]:
+		flags.append(f"Role has no assignment: {role}")
 	for warning in render.get("warnings", []):
 		flags.append(f"Render warning: {warning}")
 	changed = sum(
@@ -886,7 +942,9 @@ def command_draft(args) -> None:
 		review_lines.append(f"- Required: {entry['name']} ({entry['kind']})")
 	for entry in gaps:
 		review_lines.append(f"- Optional: {entry['name']}")
-	if not required and not gaps:
+	for role in audit["missing_roles"]:
+		review_lines.append(f"- Role: {role} (no assignment)")
+	if not required and not gaps and not audit["missing_roles"]:
 		review_lines.append("None.")
 	computed = [
 		entry for entry in audit["slots"]["empty"] if entry["kind"] == "computed"

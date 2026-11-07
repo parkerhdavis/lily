@@ -44,7 +44,9 @@ export default function DraftReadiness({
 	const optional = audit?.missing_slots.filter((slot) => !slot.required) ?? [];
 	const unknown =
 		audit?.conditions.filter((condition) => condition.result === null) ?? [];
-	const openCount = required.length + optional.length + unknown.length;
+	const missingRoles = audit?.missing_roles ?? [];
+	const openCount =
+		required.length + optional.length + unknown.length + missingRoles.length;
 
 	return (
 		<div className="mb-4 rounded-lg border border-base-300 bg-base-200/40">
@@ -56,7 +58,7 @@ export default function DraftReadiness({
 				<span className="text-sm font-semibold">Draft readiness</span>
 				<span
 					className={`badge badge-sm ${
-						required.length > 0
+						required.length > 0 || missingRoles.length > 0
 							? "badge-error"
 							: openCount > 0
 								? "badge-warning"
@@ -65,9 +67,11 @@ export default function DraftReadiness({
 				>
 					{required.length > 0
 						? `${required.length} required`
-						: openCount > 0
-							? `${openCount} open`
-							: "ready"}
+						: missingRoles.length > 0
+							? `${missingRoles.length} unassigned`
+							: openCount > 0
+								? `${openCount} open`
+								: "ready"}
 				</span>
 			</button>
 			{open && (
@@ -82,6 +86,16 @@ export default function DraftReadiness({
 							</p>
 							<SlotList label="Required" slots={required} />
 							<SlotList label="Optional" slots={optional} />
+							{missingRoles.length > 0 && (
+								<div>
+									<p className="font-medium">Unassigned roles</p>
+									<ul className="list-disc pl-4">
+										{missingRoles.map((role) => (
+											<li key={role}>{role}</li>
+										))}
+									</ul>
+								</div>
+							)}
 							{unknown.length > 0 && (
 								<div>
 									<p className="font-medium">Unknown conditions</p>

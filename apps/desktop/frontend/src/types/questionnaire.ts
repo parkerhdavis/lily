@@ -40,6 +40,10 @@ export type QuestionDef =
 			/** Variable mappings for the co-agent, following the same
 			 *  structure as `variableMappings`. */
 			coAgentVariableMappings?: Record<string, string>;
+			/** When true, the role holds an ordered list of assignments instead
+			 *  of a single contact. Each assignment is one person or a shared
+			 *  group, and the plan's role node chooses the legal wording. */
+			multiple?: boolean;
 	  }
 	| {
 			kind: "contact-list";

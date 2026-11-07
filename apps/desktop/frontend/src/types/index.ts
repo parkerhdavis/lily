@@ -135,6 +135,14 @@ export interface Contact {
 	is_minor: boolean;
 }
 
+/** One person or a shared group in an ordered role assignment. */
+export interface RoleAssignment {
+	/** One contact is a single assignment; several contacts serve together. */
+	contact_ids: string[];
+	/** Manual values for this assignment, keyed by contact property name. */
+	values?: Record<string, string>;
+}
+
 /** Maps a role (e.g., "Healthcare POA Agent") to a contact and defines which
  *  variables auto-fill from which contact properties. */
 export interface ContactBinding {
@@ -147,6 +155,9 @@ export interface ContactBinding {
 	 *  → the contact property to join (with "; "). Absent for single-contact
 	 *  bindings. */
 	contact_ids?: string[];
+	/** Ordered assignments for a role held in succession. Each assignment is
+	 *  one person or a shared group. Absent for the single-contact shape. */
+	assignments?: RoleAssignment[];
 }
 
 /** The .lily project file stored in each client/working directory. */
@@ -283,6 +294,8 @@ export interface PlanAudit {
 	conditions: PlanAuditCondition[];
 	terms: string[];
 	refs: string[];
+	roles: string[];
+	missing_roles: string[];
 }
 
 /** One saved version of a client document. */
