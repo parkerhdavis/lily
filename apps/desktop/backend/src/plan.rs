@@ -858,29 +858,20 @@ fn assign_numbers(
 
 /// Join names for one assignment: "A", "A and B", or "A, B, and C".
 fn join_names(names: &[String], conjunction: &str, separator: &str, oxford: bool) -> String {
+	let conjunction = format!(" {} ", conjunction.trim());
 	match names {
 		[] => String::new(),
 		[name] => name.clone(),
-		[first, second] => format!("{}{}{}", first, conjunction_separator(conjunction), second),
+		[first, second] => format!("{}{}{}", first, conjunction, second),
 		many => {
 			let head = many[..many.len() - 1].join(separator);
 			let last = many.last().expect("nonempty");
 			if oxford {
-				format!("{}{}{}{}", head, separator, conjunction, last)
+				format!("{}{}{}{}", head, separator, conjunction.trim_start(), last)
 			} else {
-				format!("{}{}{}", head, conjunction_separator(conjunction), last)
+				format!("{}{}{}", head, conjunction, last)
 			}
 		}
-	}
-}
-
-fn conjunction_separator(conjunction: &str) -> &'static str {
-	// The conjunction is a word; the space before and after it is layout, not
-	// data, so keep the common case readable.
-	match conjunction {
-		"and" => " and ",
-		"or" => " or ",
-		_ => " and ",
 	}
 }
 
@@ -2941,6 +2932,25 @@ mod tests {
 		);
 		assert!(text.is_empty());
 		assert_eq!(warnings, vec!["No assignment for role: Successor Trustee"]);
+	}
+
+	#[test]
+	fn join_names_uses_the_plan_conjunction() {
+		let names = |values: &[&str]| {
+			values
+				.iter()
+				.map(|value| value.to_string())
+				.collect::<Vec<_>>()
+		};
+		assert_eq!(join_names(&names(&["A", "B"]), "or", ", ", true), "A or B");
+		assert_eq!(
+			join_names(&names(&["A", "B", "C"]), "&", ", ", true),
+			"A, B, & C"
+		);
+		assert_eq!(
+			join_names(&names(&["A", "B", "C"]), "and", ", ", false),
+			"A, B and C"
+		);
 	}
 
 	#[test]
