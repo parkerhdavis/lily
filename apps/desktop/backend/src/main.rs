@@ -32,7 +32,7 @@ use questionnaire::{
     load_questionnaire_index, migrate_questionnaires, save_questionnaire,
 };
 use plan::{audit_plan_document, render_plan_document};
-use history::snapshot_document;
+use history::{list_document_versions, restore_document_version, snapshot_document};
 use settings::{load_settings, save_settings};
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
@@ -131,6 +131,8 @@ fn main() {
             render_plan_document,
             audit_plan_document,
             snapshot_document,
+            list_document_versions,
+            restore_document_version,
             migrate_template_to_sdt,
             load_lily_file_cmd,
             save_variables,

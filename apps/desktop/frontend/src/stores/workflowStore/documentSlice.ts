@@ -529,6 +529,19 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 		}
 	},
 
+	restoreVersion: async (snapshotPath) => {
+		const { documentPath } = get();
+		if (!documentPath) return;
+		await invoke("restore_document_version", {
+			docxPath: documentPath,
+			snapshotPath,
+		});
+		const documentHtml = await invoke<string>("get_document_html", {
+			docxPath: documentPath,
+		});
+		set({ documentHtml, dirty: false });
+	},
+
 	deleteDocument: async (filename) => {
 		const { workingDir } = get();
 		if (!workingDir) return;

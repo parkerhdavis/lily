@@ -48,6 +48,7 @@ export interface WorkflowState {
 	) => Promise<void>;
 	renameDocument: (newFilename: string) => Promise<void>;
 	saveDocument: () => Promise<void>;
+	restoreVersion: (snapshotPath: string) => Promise<void>;
 	refreshPreview: () => Promise<void>;
 	deleteDocument: (filename: string) => Promise<void>;
 	newVersionDocument: (filename: string) => Promise<void>;

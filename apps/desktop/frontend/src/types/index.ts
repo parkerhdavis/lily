@@ -285,6 +285,14 @@ export interface PlanAudit {
 	refs: string[];
 }
 
+/** One saved version of a client document. */
+export interface DocumentVersion {
+	path: string;
+	name: string;
+	modified: string;
+	size: number;
+}
+
 /** A node in the template folder tree. */
 export type TemplateTreeNode =
 	| { kind: "folder"; name: string; children: TemplateTreeNode[] }

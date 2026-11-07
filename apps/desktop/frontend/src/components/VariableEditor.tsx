@@ -19,6 +19,7 @@ import {
 	getDisplayName,
 	parseContactRoleVariant,
 } from "./VariableEditor/variableHelpers";
+import VersionHistory from "./VersionHistory";
 
 export default function VariableEditor() {
 	const {
@@ -601,6 +602,7 @@ export default function VariableEditor() {
 						onMouseDown={handleDragStart}
 					/>
 					<DraftReadiness planPath={planPath} clientDir={clientDir} />
+					<VersionHistory documentPath={documentPath} />
 					<SectionHeading className="mb-3">Variables</SectionHeading>
 					{variables.length > 0 && (
 						<div className="pb-3 mb-3 border-b border-base-300">

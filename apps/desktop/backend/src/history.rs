@@ -5,8 +5,10 @@
 //! client folder, so they neither sync nor bloat the working tree. Each
 //! document keeps the newest `RETENTION` versions.
 
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// How many snapshots to keep per document.
 const RETENTION: usize = 20;
@@ -118,11 +120,115 @@ pub fn snapshot_document_path(docx_path: &str) -> Result<Option<String>, String>
     Ok(snapshot.map(|path| path.to_string_lossy().to_string()))
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DocumentVersion {
+    pub path: String,
+    pub name: String,
+    pub modified: String,
+    pub size: u64,
+}
+
+pub fn list_versions_into(
+    docx_path: &Path,
+    root: &Path,
+) -> Result<Vec<DocumentVersion>, String> {
+    let Some(client_dir) = docx_path.parent() else {
+        return Ok(Vec::new());
+    };
+    let directory = client_history_dir(root, client_dir);
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let stem = sanitize(
+        docx_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("document"),
+    );
+    let prefix = format!("{}.", stem);
+    let mut versions = Vec::new();
+    for entry in fs::read_dir(&directory)
+        .map_err(|error| format!("Failed to read history directory: {}", error))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to read history entry: {}", error))?;
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with(&prefix) || !name.ends_with(".docx") {
+            continue;
+        }
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("Failed to read history metadata: {}", error))?;
+        let modified_time = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let modified = chrono::DateTime::<chrono::Local>::from(modified_time)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        versions.push((
+            modified_time,
+            DocumentVersion {
+                path: path.to_string_lossy().to_string(),
+                name,
+                modified,
+                size: metadata.len(),
+            },
+        ));
+    }
+    versions.sort_by(|left, right| right.0.cmp(&left.0));
+    Ok(versions
+        .into_iter()
+        .map(|(_, version)| version)
+        .collect())
+}
+
+pub fn restore_version_into(
+    docx_path: &Path,
+    snapshot_path: &Path,
+    root: &Path,
+) -> Result<(), String> {
+    let Some(client_dir) = docx_path.parent() else {
+        return Err("Document has no parent directory".to_string());
+    };
+    let directory = client_history_dir(root, client_dir)
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve history directory: {}", error))?;
+    let snapshot = snapshot_path
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve snapshot: {}", error))?;
+    if !snapshot.starts_with(&directory) {
+        return Err("Snapshot is outside the document's history".to_string());
+    }
+    let bytes = fs::read(&snapshot)
+        .map_err(|error| format!("Failed to read snapshot: {}", error))?;
+    snapshot_into(docx_path, root)?;
+    fs::write(docx_path, bytes)
+        .map_err(|error| format!("Failed to restore document: {}", error))?;
+    Ok(())
+}
+
 /// Copy the current document into the local history before a render overwrites
 /// it. Returns the snapshot path when the document already existed.
 #[tauri::command]
 pub fn snapshot_document(docx_path: String) -> Result<Option<String>, String> {
     snapshot_document_path(&docx_path)
+}
+
+#[tauri::command]
+pub fn list_document_versions(docx_path: String) -> Result<Vec<DocumentVersion>, String> {
+    let root = history_root()?;
+    list_versions_into(Path::new(&docx_path), &root)
+}
+
+#[tauri::command]
+pub fn restore_document_version(
+    docx_path: String,
+    snapshot_path: String,
+) -> Result<(), String> {
+    let root = history_root()?;
+    restore_version_into(
+        Path::new(&docx_path),
+        Path::new(&snapshot_path),
+        &root,
+    )
 }
 
 #[cfg(test)]
@@ -164,6 +270,26 @@ mod tests {
         let history = temp_dir("empty-history");
         let missing = history.join("missing.docx");
         assert_eq!(snapshot_into(&missing, &history).expect("snapshot"), None);
+        fs::remove_dir_all(&history).ok();
+    }
+
+    #[test]
+    fn lists_and_restores_versions() {
+        let source_dir = temp_dir("restore-source");
+        let history = temp_dir("restore-history");
+        let source = source_dir.join("Will.docx");
+        fs::write(&source, b"first").expect("first version");
+        snapshot_into(&source, &history).expect("first snapshot");
+        fs::write(&source, b"second").expect("second version");
+        snapshot_into(&source, &history).expect("second snapshot");
+        let versions = list_versions_into(&source, &history).expect("versions");
+        assert_eq!(versions.len(), 2);
+        let oldest = versions.last().expect("oldest").path.clone();
+        restore_version_into(&source, Path::new(&oldest), &history).expect("restore");
+        assert_eq!(fs::read(&source).expect("restored"), b"first");
+        let after = list_versions_into(&source, &history).expect("versions after restore");
+        assert!(after.len() >= 2);
+        fs::remove_dir_all(&source_dir).ok();
         fs::remove_dir_all(&history).ok();
     }
 }
