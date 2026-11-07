@@ -254,6 +254,37 @@ export interface VariableSchema {
 	variables: Record<string, VariableSchemaEntry>;
 }
 
+/** One slot with no value in a plan audit. */
+export interface PlanAuditSlot {
+	name: string;
+	required: boolean;
+	value: string;
+}
+
+/** One condition and the client values it reads. */
+export interface PlanAuditCondition {
+	where: string;
+	condition: unknown;
+	variables: Record<string, string | null>;
+	result: boolean | null;
+}
+
+/** The data-gap view of a document plan for one client. */
+export interface PlanAudit {
+	plan_id: string;
+	plan_version: number;
+	blocks: number;
+	clauses: number;
+	used_slots: string[];
+	declared_slots: string[];
+	missing_slots: PlanAuditSlot[];
+	undeclared_slots: string[];
+	unused_slots: string[];
+	conditions: PlanAuditCondition[];
+	terms: string[];
+	refs: string[];
+}
+
 /** A node in the template folder tree. */
 export type TemplateTreeNode =
 	| { kind: "folder"; name: string; children: TemplateTreeNode[] }

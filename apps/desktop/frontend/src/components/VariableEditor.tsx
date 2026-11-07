@@ -7,6 +7,7 @@ import StatusDot from "@/components/ui/StatusDot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import { extractFilename } from "@/utils/path";
+import DraftReadiness from "./DraftReadiness";
 import ContactRoleField from "./VariableEditor/ContactRoleField";
 import LinkedVariableField from "./VariableEditor/LinkedVariableField";
 import { renderLivePreview } from "./VariableEditor/previewRenderer";
@@ -40,7 +41,25 @@ export default function VariableEditor() {
 		openQuestionnaire,
 	} = useWorkflowStore();
 	const autosave = useSettingsStore((s) => s.settings.autosave) !== false;
+	const templatesDir = useSettingsStore((s) => s.settings.templates_dir);
 	const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const planPath = useMemo(() => {
+		if (
+			templateSchema?.engine !== "plan" ||
+			!templateSchema.plan_path ||
+			!templatesDir
+		) {
+			return null;
+		}
+		return `${templatesDir}/${templateSchema.plan_path}`;
+	}, [templateSchema, templatesDir]);
+	const clientDir = useMemo(() => {
+		if (!documentPath) return null;
+		const normalized = documentPath.replace(/\\/g, "/");
+		const separator = normalized.lastIndexOf("/");
+		return separator > 0 ? normalized.slice(0, separator) : null;
+	}, [documentPath]);
 
 	// Current document filename (for looking up per-document overrides)
 	const currentFilename = useMemo(() => {
@@ -581,6 +600,7 @@ export default function VariableEditor() {
 						className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary/20 active:bg-primary/30 transition-colors z-10"
 						onMouseDown={handleDragStart}
 					/>
+					<DraftReadiness planPath={planPath} clientDir={clientDir} />
 					<SectionHeading className="mb-3">Variables</SectionHeading>
 					{variables.length > 0 && (
 						<div className="pb-3 mb-3 border-b border-base-300">

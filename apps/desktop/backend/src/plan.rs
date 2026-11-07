@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -1915,6 +1915,259 @@ pub struct RenderReport {
 /// Render a plan over the document copy in place. The document is both the
 /// layout skeleton and the output, which is safe because `render_plan` reads
 /// the skeleton into memory before writing.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditSlot {
+    pub name: String,
+    pub required: bool,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditCondition {
+    #[serde(rename = "where")]
+    pub location: String,
+    pub condition: Value,
+    pub variables: HashMap<String, Option<String>>,
+    pub result: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanAudit {
+    pub plan_id: String,
+    pub plan_version: u32,
+    pub blocks: usize,
+    pub clauses: usize,
+    pub used_slots: Vec<String>,
+    pub declared_slots: Vec<String>,
+    pub missing_slots: Vec<AuditSlot>,
+    pub undeclared_slots: Vec<String>,
+    pub unused_slots: Vec<String>,
+    pub conditions: Vec<AuditCondition>,
+    pub terms: Vec<String>,
+    pub refs: Vec<String>,
+}
+
+fn condition_names(condition: &Value, names: &mut Vec<String>) {
+    let Value::Object(map) = condition else {
+        return;
+    };
+    for key in ["eq", "neq", "includes"] {
+        if let Some(Value::Array(pair)) = map.get(key) {
+            if let Some(Value::String(name)) = pair.first() {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+    }
+    for key in ["and", "or"] {
+        if let Some(Value::Array(children)) = map.get(key) {
+            for child in children {
+                condition_names(child, names);
+            }
+        }
+    }
+    if let Some(child) = map.get("not") {
+        condition_names(child, names);
+    }
+    if let Some(Value::String(name)) = map.get("exists") {
+        if !names.contains(name) {
+            names.push(name.clone());
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_audit_nodes(
+    plan: &DocumentPlan,
+    nodes: &[ContentNode],
+    location: &str,
+    used_slots: &mut Vec<String>,
+    terms: &mut Vec<String>,
+    refs: &mut Vec<String>,
+    conditions: &mut Vec<(String, Value)>,
+    visited_clauses: &mut HashSet<String>,
+) {
+    for node in nodes {
+        match node {
+            ContentNode::Slot { slot, .. } => {
+                if !used_slots.contains(slot) {
+                    used_slots.push(slot.clone());
+                }
+            }
+            ContentNode::Clause { clause, when } => {
+                if let Some(condition) = when {
+                    conditions.push((location.to_string(), condition.clone()));
+                }
+                if visited_clauses.insert(clause.clone()) {
+                    if let Some(definition) = plan.clauses.get(clause) {
+                        if let Some(condition) = &definition.when {
+                            conditions.push((format!("clause:{}", clause), condition.clone()));
+                        }
+                        collect_audit_nodes(
+                            plan,
+                            &definition.body,
+                            &format!("clause:{}", clause),
+                            used_slots,
+                            terms,
+                            refs,
+                            conditions,
+                            visited_clauses,
+                        );
+                    }
+                }
+            }
+            ContentNode::Term { term, .. } => {
+                if !terms.contains(term) {
+                    terms.push(term.clone());
+                }
+            }
+            ContentNode::Ref { target, .. } => {
+                if !refs.contains(target) {
+                    refs.push(target.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
+    let mut used_slots: Vec<String> = Vec::new();
+    let mut terms: Vec<String> = Vec::new();
+    let mut refs: Vec<String> = Vec::new();
+    let mut conditions: Vec<(String, Value)> = Vec::new();
+    let mut visited_clauses: HashSet<String> = HashSet::new();
+    for block in &plan.blocks {
+        if let Some(condition) = &block.when {
+            conditions.push((block.id.clone(), condition.clone()));
+        }
+        collect_audit_nodes(
+            plan,
+            &block.content,
+            &block.id,
+            &mut used_slots,
+            &mut terms,
+            &mut refs,
+            &mut conditions,
+            &mut visited_clauses,
+        );
+    }
+    used_slots.sort();
+    used_slots.dedup();
+    terms.sort();
+    refs.sort();
+
+    let mut declared: Vec<String> = plan.slots.keys().cloned().collect();
+    declared.sort();
+
+    let mut missing_slots = Vec::new();
+    for name in &used_slots {
+        let value = data
+            .get(name)
+            .or_else(|| data.get_case_insensitive(name))
+            .unwrap_or("");
+        if value.is_empty() {
+            let required = plan
+                .slots
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, slot)| slot.required)
+                .unwrap_or(false);
+            missing_slots.push(AuditSlot {
+                name: name.clone(),
+                required,
+                value: value.to_string(),
+            });
+        }
+    }
+
+    let mut condition_name_list: Vec<String> = Vec::new();
+    for (_, condition) in &conditions {
+        condition_names(condition, &mut condition_name_list);
+    }
+    let used_set: HashSet<&str> = used_slots.iter().map(String::as_str).collect();
+    let condition_set: HashSet<&str> = condition_name_list.iter().map(String::as_str).collect();
+    let undeclared_slots: Vec<String> = used_slots
+        .iter()
+        .filter(|name| {
+            !plan
+                .slots
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case(name))
+        })
+        .cloned()
+        .collect();
+    let unused_slots: Vec<String> = declared
+        .iter()
+        .filter(|name| {
+            !used_set.contains(name.as_str()) && !condition_set.contains(name.as_str())
+        })
+        .cloned()
+        .collect();
+
+    let mut audit_conditions = Vec::new();
+    for (location, condition) in conditions {
+        let mut names: Vec<String> = Vec::new();
+        condition_names(&condition, &mut names);
+        names.sort();
+        names.dedup();
+        let variables: HashMap<String, Option<String>> = names
+            .iter()
+            .map(|name| {
+                let value = data
+                    .get(name)
+                    .or_else(|| data.get_case_insensitive(name))
+                    .map(str::to_string)
+                    .or_else(|| data.facts.get(name).map(|value| value.to_string()))
+                    .or_else(|| {
+                        let list = data.get_list(name);
+                        if list.is_empty() {
+                            None
+                        } else {
+                            Some(list.join("; "))
+                        }
+                    });
+                (name.clone(), value)
+            })
+            .collect();
+        audit_conditions.push(AuditCondition {
+            location,
+            condition: condition.clone(),
+            variables,
+            result: eval_condition(&condition, data).ok(),
+        });
+    }
+
+    PlanAudit {
+        plan_id: plan.id.clone(),
+        plan_version: plan.version,
+        blocks: plan.blocks.len(),
+        clauses: plan.clauses.len(),
+        used_slots,
+        declared_slots: declared,
+        missing_slots,
+        undeclared_slots,
+        unused_slots,
+        conditions: audit_conditions,
+        terms,
+        refs,
+    }
+}
+
+#[tauri::command]
+pub fn audit_plan_document(plan_path: String, client_dir: String) -> Result<PlanAudit, String> {
+    let plan_file = Path::new(&plan_path);
+    let plan_text = fs::read_to_string(plan_file)
+        .map_err(|error| format!("Failed to read plan {}: {}", plan_file.display(), error))?;
+    let plan: DocumentPlan = serde_json::from_str(&plan_text)
+        .map_err(|error| format!("Failed to parse plan {}: {}", plan_file.display(), error))?;
+    lily_file::resolve_contact_variables(client_dir.clone())?;
+    let lily = lily_file::read_lily_file(&client_dir)?;
+    let view = DataView::from_lily(&lily);
+    Ok(audit_plan(&plan, &view))
+}
+
 #[tauri::command]
 pub fn render_plan_document(
 	docx_path: String,
@@ -2908,6 +3161,46 @@ mod tests {
 		let (body, _) = render_body(&single, &view(), &[], &mut warnings).unwrap();
 		assert_eq!(body_text(&body), "C.");
 		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn audit_plan_reports_missing_slots_and_conditions() {
+		let mut plan = test_plan(vec![
+			test_block(
+				"present",
+				"paragraph",
+				vec![ContentNode::Slot {
+					slot: "Client Full Name".to_string(),
+					format: None,
+					marks: vec![],
+				}],
+				None,
+			),
+			test_block(
+				"absent",
+				"paragraph",
+				vec![ContentNode::Slot {
+					slot: "Missing Slot".to_string(),
+					format: None,
+					marks: vec![],
+				}],
+				None,
+			),
+		]);
+		plan.blocks[0].when = Some(json!({"eq": ["has_spouse", true]}));
+		let audit = audit_plan(&plan, &view());
+		assert_eq!(
+			audit.used_slots,
+			vec!["Client Full Name".to_string(), "Missing Slot".to_string()]
+		);
+		assert_eq!(audit.missing_slots.len(), 1);
+		assert_eq!(audit.missing_slots[0].name, "Missing Slot");
+		assert_eq!(audit.conditions.len(), 1);
+		assert_eq!(audit.conditions[0].result, Some(true));
+		assert_eq!(
+			audit.conditions[0].variables.get("has_spouse"),
+			Some(&Some("true".to_string()))
+		);
 	}
 
 	#[test]
