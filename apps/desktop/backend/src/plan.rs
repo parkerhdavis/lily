@@ -65,6 +65,9 @@ pub struct DocumentPlan {
 	/// Compiler metadata, including the source template path.
 	#[serde(default)]
 	pub metadata: Option<Value>,
+	/// Directory the plan was read from, used to resolve excerpt paths.
+	#[serde(skip)]
+	pub base_dir: PathBuf,
 }
 
 /// One ordered unit of the document.
@@ -99,6 +102,10 @@ pub struct Block {
 	/// Keep this paragraph's lines on one page.
 	#[serde(default)]
 	pub keep_together: bool,
+	/// Path to a compiled excerpt plan, relative to this plan. Used by
+	/// `kind: "excerpt"` blocks.
+	#[serde(default)]
+	pub path: Option<String>,
 	/// Rows of cells for a table block.
 	#[serde(default)]
 	pub rows: Vec<Vec<TableCell>>,
@@ -1782,12 +1789,67 @@ fn render_block(
 			render_paragraph(block, plan, data, numbers, sources, warnings)
 		}
 		"table" => render_table(block, plan, data, numbers, warnings),
+		"excerpt" => render_excerpt(block, plan, data, warnings),
 		"page-break" => Ok("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>".to_string()),
 		other => Err(format!(
 			"Unsupported block kind '{}' in block '{}'",
 			other, block.id
 		)),
 	}
+}
+
+fn load_skeleton_sources(skeleton_path: &Path) -> Result<Vec<SourceFormatting>, String> {
+	let bytes = fs::read(skeleton_path)
+		.map_err(|error| format!("Failed to read skeleton {}: {}", skeleton_path.display(), error))?;
+	let mut archive = ZipArchive::new(Cursor::new(bytes))
+		.map_err(|error| format!("Failed to open skeleton as a docx: {}", error))?;
+	let mut document_xml = String::new();
+	archive
+		.by_name("word/document.xml")
+		.map_err(|error| format!("Failed to read skeleton document.xml: {}", error))?
+		.read_to_string(&mut document_xml)
+		.map_err(|error| format!("Failed to read skeleton document.xml: {}", error))?;
+	Ok(extract_source_formatting(&document_xml))
+}
+
+/// Render a compiled excerpt plan and return its body. The excerpt keeps the
+/// formatting of its own layout skeleton; it is inserted where the excerpt
+/// block sits in the main plan.
+fn render_excerpt(
+	block: &Block,
+	plan: &DocumentPlan,
+	data: &DataView,
+	warnings: &mut Vec<String>,
+) -> Result<String, String> {
+	let Some(path) = &block.path else {
+		return Err(format!("Excerpt block '{}' has no path", block.id));
+	};
+	let excerpt_path = plan.base_dir.join(path);
+	let text = fs::read_to_string(&excerpt_path).map_err(|error| {
+		format!(
+			"Failed to read excerpt {}: {}",
+			excerpt_path.display(),
+			error
+		)
+	})?;
+	let mut excerpt: DocumentPlan = serde_json::from_str(&text).map_err(|error| {
+		format!(
+			"Failed to parse excerpt {}: {}",
+			excerpt_path.display(),
+			error
+		)
+	})?;
+	excerpt.base_dir = excerpt_path
+		.parent()
+		.unwrap_or_else(|| Path::new("."))
+		.to_path_buf();
+	let sources = if excerpt.layout.is_empty() {
+		Vec::new()
+	} else {
+		load_skeleton_sources(&excerpt.base_dir.join(&excerpt.layout))?
+	};
+	let (body, _) = render_body(&excerpt, data, &sources, warnings)?;
+	Ok(body)
 }
 
 /// Evaluate every block's condition once, so a list group can see which
@@ -2197,17 +2259,60 @@ pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
     }
 }
 
+/// Read a plan and remember the directory its excerpt paths resolve against.
+fn read_plan_file(plan_path: &Path) -> Result<DocumentPlan, String> {
+	let plan_text = fs::read_to_string(plan_path)
+		.map_err(|error| format!("Failed to read plan {}: {}", plan_path.display(), error))?;
+	let mut plan: DocumentPlan = serde_json::from_str(&plan_text)
+		.map_err(|error| format!("Failed to parse plan {}: {}", plan_path.display(), error))?;
+	plan.base_dir = plan_path
+		.parent()
+		.unwrap_or_else(|| Path::new("."))
+		.to_path_buf();
+	Ok(plan)
+}
+
+/// Replace excerpt blocks with the blocks of the plan they point to, so an
+/// audit reports data gaps inside a selected excerpt. Excerpt block ids are
+/// prefixed with the parent block id; clause references keep their own names.
+fn inline_excerpts(plan: &DocumentPlan) -> Result<DocumentPlan, String> {
+	let mut expanded = DocumentPlan {
+		blocks: Vec::new(),
+		..plan.clone()
+	};
+	for block in &plan.blocks {
+		if block.kind != "excerpt" {
+			expanded.blocks.push(block.clone());
+			continue;
+		}
+		let Some(path) = &block.path else {
+			return Err(format!("Excerpt block '{}' has no path", block.id));
+		};
+		let excerpt_path = plan.base_dir.join(path);
+		let excerpt = read_plan_file(&excerpt_path)?;
+		let nested = inline_excerpts(&excerpt)?;
+		for mut child in nested.blocks {
+			child.id = format!("{}:{}", block.id, child.id);
+			expanded.blocks.push(child);
+		}
+		for (id, clause) in nested.clauses {
+			expanded.clauses.entry(id).or_insert(clause);
+		}
+		for (name, slot) in nested.slots {
+			expanded.slots.entry(name).or_insert(slot);
+		}
+	}
+	Ok(expanded)
+}
+
 #[tauri::command]
 pub fn audit_plan_document(plan_path: String, client_dir: String) -> Result<PlanAudit, String> {
-    let plan_file = Path::new(&plan_path);
-    let plan_text = fs::read_to_string(plan_file)
-        .map_err(|error| format!("Failed to read plan {}: {}", plan_file.display(), error))?;
-    let plan: DocumentPlan = serde_json::from_str(&plan_text)
-        .map_err(|error| format!("Failed to parse plan {}: {}", plan_file.display(), error))?;
-    lily_file::resolve_contact_variables(client_dir.clone())?;
-    let lily = lily_file::read_lily_file(&client_dir)?;
-    let view = DataView::from_lily(&lily);
-    Ok(audit_plan(&plan, &view))
+	let plan = read_plan_file(Path::new(&plan_path))?;
+	let plan = inline_excerpts(&plan)?;
+	lily_file::resolve_contact_variables(client_dir.clone())?;
+	let lily = lily_file::read_lily_file(&client_dir)?;
+	let view = DataView::from_lily(&lily);
+	Ok(audit_plan(&plan, &view))
 }
 
 #[tauri::command]
@@ -2260,10 +2365,7 @@ pub fn render_plan(
 	skeleton_path: &Path,
 	output_path: &Path,
 ) -> Result<RenderReport, String> {
-	let plan_text = fs::read_to_string(plan_path)
-		.map_err(|error| format!("Failed to read plan {}: {}", plan_path.display(), error))?;
-	let plan: DocumentPlan = serde_json::from_str(&plan_text)
-		.map_err(|error| format!("Failed to parse plan {}: {}", plan_path.display(), error))?;
+	let plan = read_plan_file(plan_path)?;
 
 	// Resolve contact-derived variables exactly as the app does before a fill.
 	lily_file::resolve_contact_variables(client_dir.to_string_lossy().to_string())?;
@@ -2472,6 +2574,7 @@ mod tests {
 				keep_with_next: false,
 				page_break_before: false,
 				keep_together: false,
+				path: None,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
@@ -2479,6 +2582,7 @@ mod tests {
 			terms: HashMap::new(),
 			lists: HashMap::new(),
 			metadata: None,
+			base_dir: PathBuf::new(),
 		};
 		let mut warnings = Vec::new();
 		let (body, count) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
@@ -2511,6 +2615,7 @@ mod tests {
 				keep_with_next: false,
 				page_break_before: false,
 				keep_together: false,
+				path: None,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
@@ -2518,6 +2623,7 @@ mod tests {
 			terms: HashMap::new(),
 			lists: HashMap::new(),
 			metadata: None,
+			base_dir: PathBuf::new(),
 		};
 		let mut warnings = Vec::new();
 		let (body, _) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
@@ -2561,6 +2667,7 @@ mod tests {
 				keep_with_next: false,
 				page_break_before: false,
 				keep_together: false,
+				path: None,
 				rows: vec![],
 			}],
 			clauses,
@@ -2568,6 +2675,7 @@ mod tests {
 			terms: HashMap::new(),
 			lists: HashMap::new(),
 			metadata: None,
+			base_dir: PathBuf::new(),
 		};
 		let mut warnings = Vec::new();
 		let (body, _) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
@@ -2639,6 +2747,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		}
 	}
@@ -2656,6 +2765,7 @@ mod tests {
 			terms: HashMap::new(),
 			lists: HashMap::new(),
 			metadata: None,
+			base_dir: PathBuf::new(),
 		}
 	}
 
@@ -2749,6 +2859,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![
 				vec![
 					TableCell {
@@ -2886,6 +2997,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2916,6 +3028,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2961,6 +3074,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2990,6 +3104,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let remove = Block {
@@ -3004,6 +3119,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3033,6 +3149,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let extra = Block {
@@ -3047,6 +3164,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3076,6 +3194,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let text = Block {
@@ -3090,6 +3209,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3118,6 +3238,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3142,6 +3263,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3175,6 +3297,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let inserted = Block {
@@ -3189,6 +3312,7 @@ mod tests {
 			keep_with_next: false,
 			page_break_before: false,
 			keep_together: false,
+			path: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3224,6 +3348,7 @@ mod tests {
 				keep_with_next: false,
 				page_break_before: false,
 				keep_together: false,
+				path: None,
 				rows: vec![],
 			}
 		}
@@ -3332,6 +3457,87 @@ mod tests {
 		assert!(body.contains("<w:jc w:val=\"both\"/>"));
 		assert!(body.contains("<w:keepNext/>"));
 		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn excerpt_blocks_render_their_fragment() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("lily-excerpt-{}", unique));
+		std::fs::create_dir_all(&directory).expect("temp directory");
+		let excerpt = test_plan(vec![test_block(
+			"excerpt-body",
+			"paragraph",
+			vec![text_node("Excerpt text")],
+			None,
+		)]);
+		std::fs::write(
+			directory.join("excerpt.plan.json"),
+			serde_json::to_string(&excerpt).expect("excerpt json"),
+		)
+		.expect("excerpt plan");
+		let mut excerpt_block = test_block("excerpt", "excerpt", vec![], None);
+		excerpt_block.path = Some("excerpt.plan.json".to_string());
+		let mut plan = test_plan(vec![excerpt_block.clone()]);
+		plan.base_dir = directory.clone();
+		let mut warnings = Vec::new();
+		let (body, count) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
+		assert_eq!(count, 1);
+		assert!(body.contains("Excerpt text"));
+		assert!(warnings.is_empty());
+
+		let mut skipped = excerpt_block;
+		skipped.when = Some(json!({"eq": ["has_spouse", false]}));
+		let mut plan = test_plan(vec![skipped]);
+		plan.base_dir = directory.clone();
+		let mut warnings = Vec::new();
+		let (body, count) = render_body(&plan, &view(), &[], &mut warnings).unwrap();
+		assert_eq!(count, 0);
+		assert!(!body.contains("Excerpt text"));
+		assert!(warnings.is_empty());
+		std::fs::remove_dir_all(&directory).ok();
+	}
+
+	#[test]
+	fn audit_expands_excerpt_blocks() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("lily-excerpt-audit-{}", unique));
+		std::fs::create_dir_all(&directory).expect("temp directory");
+		let mut child = test_block(
+			"child",
+			"paragraph",
+			vec![ContentNode::Slot {
+				slot: "Excerpt Missing".to_string(),
+				format: None,
+				marks: vec![],
+			}],
+			None,
+		);
+		child.when = Some(json!({"eq": ["has_spouse", true]}));
+		let excerpt = test_plan(vec![child]);
+		std::fs::write(
+			directory.join("excerpt.plan.json"),
+			serde_json::to_string(&excerpt).expect("excerpt json"),
+		)
+		.expect("excerpt plan");
+		let mut excerpt_block = test_block("excerpt", "excerpt", vec![], None);
+		excerpt_block.path = Some("excerpt.plan.json".to_string());
+		let mut plan = test_plan(vec![excerpt_block]);
+		plan.base_dir = directory.clone();
+		let expanded = inline_excerpts(&plan).expect("expanded plan");
+		assert_eq!(expanded.blocks.len(), 1);
+		assert_eq!(expanded.blocks[0].id, "excerpt:child");
+		let audit = audit_plan(&expanded, &view());
+		assert_eq!(audit.used_slots, vec!["Excerpt Missing".to_string()]);
+		assert_eq!(audit.missing_slots.len(), 1);
+		assert_eq!(audit.conditions.len(), 1);
+		assert_eq!(audit.conditions[0].location, "excerpt:child");
+		std::fs::remove_dir_all(&directory).ok();
 	}
 
 	#[test]

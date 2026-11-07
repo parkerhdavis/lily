@@ -52,12 +52,28 @@ The golden corpus snapshots are normalized text, so compare the rendered text ag
 - Tabs and line breaks.
 - Slot declarations with type, required flag, default, help text, and contact-role source.
 
+## Conditional Excerpts
+
+A large variant section can live in its own plan and be inserted where it belongs:
+
+```json
+{
+  "id": "childrens-trust",
+  "kind": "excerpt",
+  "path": "Excerpts/Pour Over Children's Trust.plan.json",
+  "when": { "eq": ["has_children", true] }
+}
+```
+
+The path resolves relative to the plan file. The excerpt is compiled like any other plan and keeps its own layout skeleton's formatting, so a section can carry a different layout without becoming a second full document. The excerpt block's ordinary `when` condition decides whether the section appears. The audit expands excerpts, so a data gap inside a selected excerpt is reported under a `parent:child` block id.
+
 ## What It Does Not Do
 
 - It does not infer defined terms. Add terms manually for documents such as the Trust Agreement.
 - It does not capture tables or images yet. It warns and skips them.
 - It does not infer article numbering or cross-references. Add `numbering` to headings and `number` and `ref` nodes in the plan.
 - It does not edit headers or footers; the renderer replaces simple `lily:` slots there.
+- It does not share numbering, defined terms, or clause ids between an excerpt and its parent. Compile an excerpt as a self-contained section whose article and section numbers stand on their own.
 - It does not make legal judgments about clause boundaries or branch correctness. That is the review.
 
 ## Review Checklist

@@ -24,6 +24,7 @@ go to stderr with a non-zero exit code so an agent can branch on them.
 """
 
 import argparse
+import copy
 import difflib
 import json
 import os
@@ -552,6 +553,38 @@ def evaluate_condition(condition, variables: dict, lists: dict):
 	return None
 
 
+def expand_excerpts(plan: dict, base_dir: Path, prefix: str = "") -> dict:
+	"""Inline excerpt blocks so an audit sees the data gaps inside them."""
+	expanded = copy.deepcopy(plan)
+	blocks = []
+	for block in plan.get("blocks", []):
+		block = copy.deepcopy(block)
+		block_id = block.get("id", "excerpt")
+		if block.get("kind") != "excerpt":
+			block["id"] = f"{prefix}{block_id}"
+			blocks.append(block)
+			continue
+		path = block.get("path")
+		if not path:
+			fail(f"Excerpt block '{block_id}' has no path")
+		excerpt_path = (base_dir / path).resolve()
+		if not excerpt_path.is_file():
+			fail(f"Excerpt not found: {excerpt_path}")
+		excerpt = read_json(excerpt_path)
+		nested = expand_excerpts(
+			excerpt, excerpt_path.parent, prefix=f"{prefix}{block_id}:"
+		)
+		blocks.extend(nested.get("blocks", []))
+		clauses = expanded.setdefault("clauses", {})
+		for clause_id, clause in nested.get("clauses", {}).items():
+			clauses.setdefault(clause_id, clause)
+		slots = expanded.setdefault("slots", {})
+		for name, slot in nested.get("slots", {}).items():
+			slots.setdefault(name, slot)
+	expanded["blocks"] = blocks
+	return expanded
+
+
 def collect_plan_references(plan: dict) -> dict:
 	slots: list[str] = []
 	clause_refs: set[str] = set()
@@ -674,7 +707,7 @@ def command_plan_audit(args) -> None:
 	plan_path = Path(args.plan).expanduser().resolve()
 	if not plan_path.is_file():
 		fail(f"Plan not found: {plan_path}")
-	plan = read_json(plan_path)
+	plan = expand_excerpts(read_json(plan_path), plan_path.parent)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
 	variables, lists = audit_variables(client)
 	report = audit_plan(plan, variables, lists)
@@ -772,7 +805,7 @@ def command_draft(args) -> None:
 	plan = read_json(plan_path)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
 	variables, lists = audit_variables(client)
-	audit = audit_plan(plan, variables, lists)
+	audit = audit_plan(expand_excerpts(plan, plan_path.parent), variables, lists)
 	skeleton = plan_skeleton(plan_path, plan, args.skeleton)
 
 	output_dir = Path(args.output_dir).expanduser().resolve()
