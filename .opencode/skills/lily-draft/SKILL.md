@@ -28,7 +28,7 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
 
 The renderer preserves the template's layout, but it does not decide page breaks. After the candidate renders, produce page images with `scripts/lily layout` and read them. The findings belong in the review bundle with page numbers and block names.
 
-The plan does not yet carry keep-with-next or page-break intents. Record the proposed intent in the review bundle and on the task that owns the layout pass; do not edit the template to force a break.
+The plan carries `keep_with_next`, `page_break_before`, and `keep_together` on a block. After a layout review, set them on the block that needs the hint; the renderer emits `w:keepNext`, `w:pageBreakBefore`, and `w:keepLines`. Do not edit the template to force a break.
 
 ## Rules
 

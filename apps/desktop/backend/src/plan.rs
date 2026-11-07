@@ -90,6 +90,15 @@ pub struct Block {
 	/// chosen from the enabled items rather than written into the content.
 	#[serde(default)]
 	pub list: Option<String>,
+	/// Keep this paragraph on the same page as the next one.
+	#[serde(default)]
+	pub keep_with_next: bool,
+	/// Start this paragraph on a new page.
+	#[serde(default)]
+	pub page_break_before: bool,
+	/// Keep this paragraph's lines on one page.
+	#[serde(default)]
+	pub keep_together: bool,
 	/// Rows of cells for a table block.
 	#[serde(default)]
 	pub rows: Vec<Vec<TableCell>>,
@@ -882,6 +891,7 @@ fn render_paragraph(
 	} else {
 		style_paragraph(block)
 	};
+	let properties = apply_layout_hints(&properties, block);
 	Ok(format!("<w:p>{}{}</w:p>", properties, content))
 }
 
@@ -893,6 +903,38 @@ fn style_paragraph(block: &Block) -> String {
 			"<w:pPr><w:pStyle w:val=\"{}\"/></w:pPr>",
 			escape_xml(&block.style)
 		)
+	}
+}
+
+/// Add the block's layout intents to a paragraph's properties.
+fn apply_layout_hints(ppr: &str, block: &Block) -> String {
+	let mut hints = String::new();
+	if block.keep_with_next && !ppr.contains("<w:keepNext") {
+		hints.push_str("<w:keepNext/>");
+	}
+	if block.page_break_before && !ppr.contains("<w:pageBreakBefore") {
+		hints.push_str("<w:pageBreakBefore/>");
+	}
+	if block.keep_together && !ppr.contains("<w:keepLines") {
+		hints.push_str("<w:keepLines/>");
+	}
+	if hints.is_empty() {
+		return ppr.to_string();
+	}
+	if ppr.is_empty() || ppr == "<w:pPr/>" {
+		return format!("<w:pPr>{}</w:pPr>", hints);
+	}
+	if ppr.ends_with("/>") {
+		let prefix = ppr.trim_end_matches("/>");
+		return format!("{}>{}</w:pPr>", prefix, hints);
+	}
+	match ppr.rfind("</w:pPr>") {
+		Some(position) => {
+			let mut output = ppr.to_string();
+			output.insert_str(position, &hints);
+			output
+		}
+		None => format!("<w:pPr>{}</w:pPr>", hints),
 	}
 }
 
@@ -1476,7 +1518,7 @@ fn edit_paragraph(
 	} else {
 		open.to_string()
 	};
-	let mut inner = parsed.ppr.clone();
+	let mut inner = apply_layout_hints(&parsed.ppr, block);
 	for (index, run) in parsed.runs.iter().enumerate() {
 		let groups = by_run.get(&index);
 		if groups.is_none() && run.extras.is_empty() {
@@ -2427,6 +2469,9 @@ mod tests {
 				numbering: None,
 				source_paragraph: None,
 				list: None,
+				keep_with_next: false,
+				page_break_before: false,
+				keep_together: false,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
@@ -2463,6 +2508,9 @@ mod tests {
 				numbering: None,
 				source_paragraph: None,
 				list: None,
+				keep_with_next: false,
+				page_break_before: false,
+				keep_together: false,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
@@ -2510,6 +2558,9 @@ mod tests {
 				numbering: None,
 				source_paragraph: None,
 				list: None,
+				keep_with_next: false,
+				page_break_before: false,
+				keep_together: false,
 				rows: vec![],
 			}],
 			clauses,
@@ -2585,6 +2636,9 @@ mod tests {
 			numbering: numbering.map(|value| value.to_string()),
 			source_paragraph: None,
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		}
 	}
@@ -2692,6 +2746,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: None,
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![
 				vec![
 					TableCell {
@@ -2826,6 +2883,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2853,6 +2913,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2895,6 +2958,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2921,6 +2987,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let remove = Block {
@@ -2932,6 +3001,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(1),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2958,6 +3030,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let extra = Block {
@@ -2969,6 +3044,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: None,
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2995,6 +3073,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let text = Block {
@@ -3006,6 +3087,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(1),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3031,6 +3115,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: None,
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3052,6 +3139,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3082,6 +3172,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: Some(0),
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let inserted = Block {
@@ -3093,6 +3186,9 @@ mod tests {
 			numbering: None,
 			source_paragraph: None,
 			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -3125,6 +3221,9 @@ mod tests {
 				numbering: None,
 				source_paragraph: None,
 				list: Some("letters".to_string()),
+				keep_with_next: false,
+				page_break_before: false,
+				keep_together: false,
 				rows: vec![],
 			}
 		}
@@ -3201,6 +3300,38 @@ mod tests {
 			audit.conditions[0].variables.get("has_spouse"),
 			Some(&Some("true".to_string()))
 		);
+	}
+
+	#[test]
+	fn layout_hints_emit_word_properties() {
+		let mut block = test_block("spaced", "paragraph", vec![text_node("Text")], None);
+		block.keep_with_next = true;
+		block.page_break_before = true;
+		block.keep_together = true;
+		let mut warnings = Vec::new();
+		let (body, _) =
+			render_body(&test_plan(vec![block]), &view(), &[], &mut warnings).unwrap();
+		assert!(body.contains("<w:keepNext/>"));
+		assert!(body.contains("<w:pageBreakBefore/>"));
+		assert!(body.contains("<w:keepLines/>"));
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn layout_hints_merge_into_source_properties() {
+		let source = SourceFormatting {
+			ppr: "<w:pPr><w:jc w:val=\"both\"/></w:pPr>".to_string(),
+			rpr: String::new(),
+		};
+		let mut block = test_block("block-000", "paragraph", vec![text_node("Text")], None);
+		block.source_paragraph = Some(0);
+		block.keep_with_next = true;
+		let mut warnings = Vec::new();
+		let (body, _) =
+			render_body(&test_plan(vec![block]), &view(), &[source], &mut warnings).unwrap();
+		assert!(body.contains("<w:jc w:val=\"both\"/>"));
+		assert!(body.contains("<w:keepNext/>"));
+		assert!(warnings.is_empty());
 	}
 
 	#[test]
