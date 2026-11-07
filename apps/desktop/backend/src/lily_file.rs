@@ -1224,6 +1224,76 @@ pub fn export_client_data(working_dir: String, export_path: String) -> Result<()
     atomic_write(Path::new(&export_path), &content)
 }
 
+/// Zip the whole client folder, including the `.lily` source and every
+/// document. The archive contains a top-level folder named after the client so
+/// extracting it does not scatter files into the current directory.
+#[tauri::command]
+pub fn export_client_archive(working_dir: String, export_path: String) -> Result<(), String> {
+    let directory = Path::new(&working_dir);
+    if !directory.is_dir() {
+        return Err(format!("Client folder not found: {}", directory.display()));
+    }
+    let archive = Path::new(&export_path);
+    if archive.starts_with(directory) {
+        return Err("Choose an export location outside the client folder.".to_string());
+    }
+    let file = fs::File::create(archive)
+        .map_err(|error| format!("Failed to create archive: {}", error))?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let root_name = directory
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("client");
+    writer
+        .add_directory(format!("{}/", root_name), options)
+        .map_err(|error| format!("Failed to write archive: {}", error))?;
+    add_archive_directory(&mut writer, directory, directory, root_name, options)?;
+    writer
+        .finish()
+        .map_err(|error| format!("Failed to finish archive: {}", error))?;
+    Ok(())
+}
+
+fn add_archive_directory(
+    writer: &mut zip::ZipWriter<fs::File>,
+    root: &Path,
+    current: &Path,
+    root_name: &str,
+    options: zip::write::SimpleFileOptions,
+) -> Result<(), String> {
+    let entries = fs::read_dir(current)
+        .map_err(|error| format!("Failed to read {}: {}", current.display(), error))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("Failed to read folder entry: {}", error))?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|error| format!("Failed to make archive path: {}", error))?;
+        let name = format!(
+            "{}/{}",
+            root_name,
+            relative.to_string_lossy().replace('\\', "/")
+        );
+        if path.is_dir() {
+            writer
+                .add_directory(format!("{}/", name), options)
+                .map_err(|error| format!("Failed to write archive: {}", error))?;
+            add_archive_directory(writer, root, &path, root_name, options)?;
+        } else {
+            let mut source = fs::File::open(&path)
+                .map_err(|error| format!("Failed to read {}: {}", path.display(), error))?;
+            writer
+                .start_file(name, options)
+                .map_err(|error| format!("Failed to write archive entry: {}", error))?;
+            std::io::copy(&mut source, writer)
+                .map_err(|error| format!("Failed to write archive data: {}", error))?;
+        }
+    }
+    Ok(())
+}
+
 // ─── Document consistency check ─────────────────────────────────────────
 
 /// Report of file consistency between the .lily metadata and the actual
@@ -2483,5 +2553,41 @@ mod tests {
         fresh.questionnaire_id = Some("3c74a6ef-1edc-4fc1-8a3e-4971a9072089".into());
         fresh.questionnaire_version = Some(4);
         assert!(is_empty_project(&fresh));
+    }
+
+    #[test]
+    fn exports_the_client_folder_as_a_zip() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let client = std::env::temp_dir().join(format!("lily-export-{}", unique));
+        std::fs::create_dir_all(&client).expect("client folder");
+        std::fs::write(client.join("Client.lily"), b"{}").expect("lily");
+        std::fs::write(client.join("Will.docx"), b"docx").expect("docx");
+        let archive = std::env::temp_dir().join(format!("lily-export-{}.zip", unique));
+        export_client_archive(
+            client.to_string_lossy().to_string(),
+            archive.to_string_lossy().to_string(),
+        )
+        .expect("archive");
+        let file = std::fs::File::open(&archive).expect("archive file");
+        let mut zip = zip::ZipArchive::new(file).expect("zip");
+        let names: Vec<String> = (0..zip.len())
+            .map(|index| zip.by_index(index).expect("entry").name().to_string())
+            .collect();
+        let prefix = client
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .to_string();
+        assert!(names
+            .iter()
+            .any(|name| name == &format!("{}/Client.lily", prefix)));
+        assert!(names
+            .iter()
+            .any(|name| name == &format!("{}/Will.docx", prefix)));
+        std::fs::remove_dir_all(&client).ok();
+        std::fs::remove_file(&archive).ok();
     }
 }

@@ -19,7 +19,7 @@ use docx_ops::{
 use lily_file::{
     add_client_variable, add_contact, add_required_document, copy_from_spouse_lily,
     delete_contact, delete_document, check_document_consistency, detect_document_statuses,
-    export_client_data, import_client_data, list_clients_in_library,
+    export_client_data, export_client_archive, import_client_data, list_clients_in_library,
     apply_variable_migration, create_lily_file, has_lily_file,
     list_library_tree, load_client_summaries, load_lily_file_cmd, new_version_document,
     open_file_in_os, remove_client_variable, remove_required_document, resolve_contact_variables,
@@ -155,6 +155,7 @@ fn main() {
             set_role_override,
             set_client_questionnaire,
             export_client_data,
+            export_client_archive,
             import_client_data,
             load_questionnaire_index,
             load_questionnaire,

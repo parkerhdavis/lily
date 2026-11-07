@@ -696,6 +696,25 @@ function ClientContentPane({
 		}
 	};
 
+	const handleExportArchive = async () => {
+		const folderName = extractFolderName(workingDir);
+		const path = await saveDialog({
+			title: "Export Client Folder",
+			defaultPath: `${folderName} - ${new Date().toISOString().slice(0, 10)}.zip`,
+			filters: [{ name: "Zip archive", extensions: ["zip"] }],
+		});
+		if (!path) return;
+		try {
+			await invoke("export_client_archive", {
+				workingDir,
+				exportPath: path,
+			});
+			useToastStore.getState().addToast("success", "Client folder exported");
+		} catch (err) {
+			useToastStore.getState().addToast("error", `Export failed: ${err}`);
+		}
+	};
+
 	const handleImport = async () => {
 		const path = await open({
 			title: "Import Client Data",
@@ -801,6 +820,11 @@ function ClientContentPane({
 									tabIndex={0}
 									className="dropdown-content menu bg-base-100 rounded-box shadow-lg border border-base-300 w-44 p-1 z-50"
 								>
+									<li>
+										<button type="button" onClick={handleExportArchive}>
+											Export Client Folder
+										</button>
+									</li>
 									<li>
 										<button type="button" onClick={handleExport}>
 											Export Client Data
