@@ -37,7 +37,7 @@ Lily streamlines the process of gathering client information and using it to pop
 ### Save and Track
 - **Autosave** writes changes after a 2-second pause (or manual `Ctrl+S`)
 - Track documents through statuses: Not Started → Drafting → Reviewing → Complete → Executed
-- Create **dated versions** of documents to preserve history
+- Create **dated versions** of documents to preserve history (kept under Lily's local data directory, 20 per document)
 - The completed `.docx` is a standard Word file, ready for editing in any word processor
 - Lily templating is saved under the surface; you can bring the .docx back into Lily anytime
 

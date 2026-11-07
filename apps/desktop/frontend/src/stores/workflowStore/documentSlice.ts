@@ -104,6 +104,7 @@ async function applyDocumentValues(
 	const planPath = templateSchema
 		? planPathFor(templatesDir, templateSchema)
 		: null;
+	await invoke("snapshot_document", { docxPath });
 	if (planPath) {
 		await invoke("render_plan_document", {
 			docxPath,
