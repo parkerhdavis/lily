@@ -689,6 +689,12 @@ def client_role_names(client: dict) -> dict[str, list[str]]:
 					names.append(value)
 		if names:
 			roles[role] = names
+	if "Successor Trustee" not in roles:
+		legacy_names: list[str] = []
+		for role in ["Primary Trustee", "Secondary Trustee", "Tertiary Trustee"]:
+			legacy_names.extend(roles.get(role, []))
+		if legacy_names:
+			roles["Successor Trustee"] = legacy_names
 	return roles
 
 

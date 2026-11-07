@@ -2427,7 +2427,10 @@ fn collect_audit_nodes(
                     }
                 }
             }
-            ContentNode::Role { role, .. } => {
+            ContentNode::Role { role, when, .. } => {
+                if let Some(condition) = when {
+                    conditions.push((location.to_string(), condition.clone()));
+                }
                 if !roles.contains(role) {
                     roles.push(role.clone());
                 }
