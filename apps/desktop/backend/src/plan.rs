@@ -1587,12 +1587,18 @@ fn edit_body(
 	if paragraphs.is_empty() {
 		return Ok(None);
 	}
+	let paragraph_ordinal: HashMap<usize, usize> = paragraphs
+		.iter()
+		.enumerate()
+		.map(|(ordinal, index)| (*index, ordinal))
+		.collect();
 
 	let numbers = assign_numbers(plan, data)?;
 	let mut replacements: HashMap<usize, Option<String>> = HashMap::new();
 	let mut insertions: HashMap<usize, Vec<String>> = HashMap::new();
 	let mut before_first: Vec<String> = Vec::new();
 	let mut last_source: Option<usize> = None;
+	let mut last_source_ordinal: Option<usize> = None;
 	let mut count = 0usize;
 	let mut resolved = 0usize;
 
@@ -1604,6 +1610,7 @@ fn edit_body(
 		match block_source_child(block, &paragraphs, children.len()) {
 			Some(index) if children[index].trim_start().starts_with("<w:p") => {
 				last_source = Some(index);
+				last_source_ordinal = paragraph_ordinal.get(&index).copied();
 				resolved += 1;
 				if enabled {
 					let edited = edit_paragraph(
@@ -1622,6 +1629,7 @@ fn edit_body(
 			}
 			Some(index) => {
 				last_source = Some(index);
+				last_source_ordinal = None;
 				resolved += 1;
 				if enabled {
 					let rendered =
@@ -1633,7 +1641,12 @@ fn edit_body(
 				}
 			}
 			None if enabled => {
-				let rendered = render_block(block, plan, data, &numbers, sources, warnings)?;
+				let mut formatted = block.clone();
+				if formatted.source_paragraph.is_none() {
+					formatted.source_paragraph = last_source_ordinal;
+				}
+				let rendered =
+					render_block(&formatted, plan, data, &numbers, sources, warnings)?;
 				match last_source {
 					Some(index) => insertions.entry(index).or_default().push(rendered),
 					None => before_first.push(rendered),
@@ -2630,6 +2643,47 @@ mod tests {
 		assert!(underlined_run.contains("Title"));
 		assert!(!underlined_run.contains("Body"));
 		assert!(edited.contains(". Body text."));
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn inserted_blocks_inherit_the_preceding_paragraph_formatting() {
+		let document = r#"<w:document><w:body><w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Times New Roman"/></w:rPr><w:t>First</w:t></w:r></w:p></w:body></w:document>"#;
+		let first = Block {
+			id: "block-000".to_string(),
+			kind: "paragraph".to_string(),
+			style: String::new(),
+			content: vec![text_node("First")],
+			when: None,
+			numbering: None,
+			source_paragraph: Some(0),
+			rows: vec![],
+		};
+		let inserted = Block {
+			id: "note".to_string(),
+			kind: "paragraph".to_string(),
+			style: "Normal".to_string(),
+			content: vec![text_node("Inserted")],
+			when: None,
+			numbering: None,
+			source_paragraph: None,
+			rows: vec![],
+		};
+		let mut warnings = Vec::new();
+		let sources = vec![SourceFormatting {
+			ppr: "<w:pPr><w:jc w:val=\"both\"/></w:pPr>".to_string(),
+			rpr: "<w:rPr><w:rFonts w:ascii=\"Times New Roman\"/></w:rPr>".to_string(),
+		}];
+		let (edited, _) =
+			edit_body(document, &test_plan(vec![first, inserted]), &view(), &sources, &mut warnings)
+				.unwrap()
+				.expect("body is editable");
+		let position = edited.find("Inserted").expect("inserted text");
+		let start = edited[..position].rfind("<w:p>").expect("inserted paragraph");
+		let paragraph = &edited[start..];
+		assert!(paragraph.contains("<w:jc w:val=\"both\"/>"));
+		assert!(paragraph.contains("Times New Roman"));
+		assert!(!paragraph.contains("w:pStyle"));
 		assert!(warnings.is_empty());
 	}
 
