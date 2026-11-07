@@ -257,6 +257,7 @@ pub struct Term {
 pub struct DataView {
 	pub variables: HashMap<String, String>,
 	pub facts: HashMap<String, bool>,
+	pub lists: HashMap<String, Vec<String>>,
 }
 
 impl DataView {
@@ -264,7 +265,15 @@ impl DataView {
 		let mut view = Self {
 			variables: lily.variables.clone(),
 			facts: HashMap::new(),
+			lists: HashMap::new(),
 		};
+		view.lists.insert(
+			"required_documents".to_string(),
+			lily.required_documents
+				.iter()
+				.map(|document| document.template_rel_path.clone())
+				.collect(),
+		);
 		for (key, value) in &view.variables {
 			if value == "true" || value == "false" {
 				let fact = value == "true";
@@ -350,6 +359,10 @@ impl DataView {
 			.unwrap_or(false)
 	}
 
+	pub fn get_list(&self, name: &str) -> &[String] {
+		self.lists.get(name).map(Vec::as_slice).unwrap_or(&[])
+	}
+
 	pub fn exists(&self, name: &str) -> bool {
 		self.facts.contains_key(name)
 			|| self
@@ -417,6 +430,20 @@ pub fn eval_condition(condition: &Value, data: &DataView) -> Result<bool, String
 					.as_str()
 					.ok_or_else(|| "neq name must be a string".to_string())?;
 				Ok(!matches_value(name, &values[1], data))
+			} else if let Some(pair) = map.get("includes") {
+				let values = pair
+					.as_array()
+					.ok_or_else(|| "includes expects [name, value]".to_string())?;
+				if values.len() != 2 {
+					return Err("includes expects exactly two values".to_string());
+				}
+				let name = values[0]
+					.as_str()
+					.ok_or_else(|| "includes name must be a string".to_string())?;
+				let needle = values[1]
+					.as_str()
+					.ok_or_else(|| "includes value must be a string".to_string())?;
+				Ok(data.get_list(name).iter().any(|value| value == needle))
 			} else if let Some(children) = map.get("and") {
 				let children = children
 					.as_array()
@@ -1993,6 +2020,39 @@ mod tests {
 		assert!(eval_condition(&condition, &view()).unwrap());
 		let condition = json!({"not": {"eq": ["has_spouse", true]}});
 		assert!(!eval_condition(&condition, &view()).unwrap());
+	}
+
+	#[test]
+	fn eval_condition_includes_required_document() {
+		let mut lily = LilyFile::default();
+		lily.required_documents.push(lily_file::RequiredDocument {
+			id: "trust".to_string(),
+			template_rel_path: "04 - Trust Templates/Trust Agreement Template.docx".to_string(),
+			status: lily_file::DocumentStatus::default(),
+			document_filename: None,
+			notes: String::new(),
+		});
+		let view = DataView::from_lily(&lily);
+		assert!(eval_condition(
+			&json!({
+				"includes": [
+					"required_documents",
+					"04 - Trust Templates/Trust Agreement Template.docx"
+				]
+			}),
+			&view
+		)
+		.unwrap());
+		assert!(!eval_condition(
+			&json!({
+				"includes": [
+					"required_documents",
+					"03 - Will Templates/Last Will and Testament Template.docx"
+				]
+			}),
+			&view
+		)
+		.unwrap());
 	}
 
 	#[test]

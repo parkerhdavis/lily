@@ -455,7 +455,14 @@ def audit_variables(client: dict) -> dict:
 	variables["And Spouse Name"] = (
 		f" and {spouse_name}" if has_spouse and spouse_name else ""
 	)
-	return variables
+	lists = {
+		"required_documents": [
+			document.get("template_rel_path", "")
+			for document in client.get("required_documents", [])
+			if document.get("template_rel_path")
+		]
+	}
+	return variables, lists
 
 
 def lookup_variable(variables: dict, name: str):
@@ -476,6 +483,9 @@ def condition_variables(condition) -> set[str]:
 		pair = condition.get(key)
 		if isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], str):
 			names.add(pair[0])
+	includes = condition.get("includes")
+	if isinstance(includes, list) and len(includes) == 2 and isinstance(includes[0], str):
+		names.add(includes[0])
 	for key in ("and", "or"):
 		for child in condition.get(key) or []:
 			names |= condition_variables(child)
@@ -486,7 +496,7 @@ def condition_variables(condition) -> set[str]:
 	return names
 
 
-def evaluate_condition(condition, variables: dict):
+def evaluate_condition(condition, variables: dict, lists: dict):
 	if isinstance(condition, bool):
 		return condition
 	if not isinstance(condition, dict):
@@ -510,18 +520,30 @@ def evaluate_condition(condition, variables: dict):
 		else:
 			result = str(actual) == str(expected)
 		return result if key == "eq" else not result
+	if "includes" in condition:
+		pair = condition.get("includes")
+		if not isinstance(pair, list) or len(pair) != 2:
+			return None
+		name, needle = pair
+		return str(needle) in lists.get(name, [])
 	if "and" in condition:
-		results = [evaluate_condition(child, variables) for child in condition.get("and") or []]
+		results = [
+			evaluate_condition(child, variables, lists)
+			for child in condition.get("and") or []
+		]
 		if any(result is False for result in results):
 			return False
 		return None if any(result is None for result in results) else True
 	if "or" in condition:
-		results = [evaluate_condition(child, variables) for child in condition.get("or") or []]
+		results = [
+			evaluate_condition(child, variables, lists)
+			for child in condition.get("or") or []
+		]
 		if any(result is True for result in results):
 			return True
 		return None if any(result is None for result in results) else False
 	if "not" in condition:
-		result = evaluate_condition(condition["not"], variables)
+		result = evaluate_condition(condition["not"], variables, lists)
 		return None if result is None else not result
 	if isinstance(condition.get("exists"), str):
 		value = lookup_variable(variables, condition["exists"])
@@ -584,7 +606,7 @@ def computed_slot(name: str) -> bool:
 	)
 
 
-def audit_plan(plan: dict, variables: dict) -> dict:
+def audit_plan(plan: dict, variables: dict, lists: dict) -> dict:
 	references = collect_plan_references(plan)
 	declared = plan.get("slots", {})
 	used = sorted(set(references["slots"]))
@@ -613,14 +635,17 @@ def audit_plan(plan: dict, variables: dict) -> dict:
 			continue
 		seen.add(signature)
 		names = sorted(condition_variables(condition))
-		values = {name: lookup_variable(variables, name) for name in names}
+		values = {
+			name: lists[name] if name in lists else lookup_variable(variables, name)
+			for name in names
+		}
 		conditions.append(
 			{
 				"where": where,
 				"condition": condition,
 				"variables": names,
 				"values": values,
-				"result": evaluate_condition(condition, variables),
+				"result": evaluate_condition(condition, variables, lists),
 			}
 		)
 	return {
@@ -650,7 +675,8 @@ def command_plan_audit(args) -> None:
 		fail(f"Plan not found: {plan_path}")
 	plan = read_json(plan_path)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
-	report = audit_plan(plan, audit_variables(client))
+	variables, lists = audit_variables(client)
+	report = audit_plan(plan, variables, lists)
 	report["client"] = str(client_path)
 	if args.json:
 		print(json.dumps(report, indent=2))
