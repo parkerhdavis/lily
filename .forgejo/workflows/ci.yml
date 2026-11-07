@@ -20,8 +20,9 @@ jobs:
         with:
           bun-version: latest
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.93.1
           components: clippy
 
       - name: Install system dependencies
