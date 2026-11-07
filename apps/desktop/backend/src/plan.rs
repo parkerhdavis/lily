@@ -551,7 +551,7 @@ fn resolve_term(
 			.unwrap_or(false),
 		_ => false,
 	};
-	let key = match form.unwrap_or("singular") {
+	let key = match form.unwrap_or(if plural { "plural" } else { "singular" }) {
 		"plural" => "plural",
 		"singular" => "singular",
 		"possessive" => {
@@ -2103,6 +2103,11 @@ mod tests {
 		);
 		assert_eq!(
 			resolve_term(&term, Some("singular"), Some("auto"), &view()),
+			"Settlor"
+		);
+		assert_eq!(resolve_term(&term, None, None, &view()), "Settlors");
+		assert_eq!(
+			resolve_term(&term, None, Some("singular"), &view()),
 			"Settlor"
 		);
 	}

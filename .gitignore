@@ -87,4 +87,4 @@ scripts/__pycache__/
 
 # Local worktrees and scratch
 .worktrees/
-.working/
+.tmp/
