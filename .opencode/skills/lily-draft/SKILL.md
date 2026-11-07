@@ -16,7 +16,7 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
 ## Loop
 
 1. **Audit.** Run `scripts/lily draft --plan <plan> --client-dir <client> --output-dir .tmp/draft/<name> --previous <existing.docx> --json`. One command writes the candidate, `review.md`, `audit.json`, `render.json`, and `diff.txt`. Read `review.md` first; it carries the data gaps, condition results, render warnings, diff, and flags.
-2. **Resolve gaps.** A missing client value is a question for the attorney, not a guess. A missing prose slot such as distribution instructions or a special bequest may be drafted only from the client's own answers and must be flagged for review. A missing clause is a gap: propose it, do not invent legal text.
+2. **Resolve gaps.** A missing client value is a question for the attorney, not a guess. A role with no assignment is a gap too: ask who fills it, or whether the role belongs in this document. A missing prose slot such as distribution instructions or a special bequest may be drafted only from the client's own answers and must be flagged for review. A missing clause is a gap: propose it, do not invent legal text.
 3. **Inspect the individual steps** when the bundle needs a closer look:
    - `scripts/lily plan audit --plan <plan> --client-dir <client> --json`
    - `scripts/lily plan render --plan <plan> --client-dir <client> --output .tmp/draft/<name>.docx --json`

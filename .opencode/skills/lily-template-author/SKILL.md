@@ -67,6 +67,24 @@ A large variant section can live in its own plan and be inserted where it belong
 
 The path resolves relative to the plan file. The excerpt is compiled like any other plan and keeps its own layout skeleton's formatting, so a section can carry a different layout without becoming a second full document. The excerpt block's ordinary `when` condition decides whether the section appears. The audit expands excerpts, so a data gap inside a selected excerpt is reported under a `parent:child` block id.
 
+## Roles
+
+A role node renders the client's ordered assignment list for one role:
+
+```json
+{
+  "role": "Successor Trustee",
+  "intro": "If both of the original Co-Trustees shall die, Settlors nominate {names} to serve as Trustee. ",
+  "shared_intro": "Settlors nominate {names} to serve as Co-Trustees. ",
+  "successor": "If {previous} shall die, {names} shall serve as Trustee. ",
+  "when": { "eq": ["Has Spouse", true] }
+}
+```
+
+A client binding stores `assignments`: each assignment is one contact or a shared group, and each later assignment is a successor tier. The renderer joins a group with the conjunction (default `and`), replaces `{names}` with the joined group and `{previous}` with the prior tier, and uses `intro` for a single first assignment, `shared_intro` for a shared first assignment, and `successor` for every later tier. `conjunction`, `separator`, and `oxford` override the join defaults. The role node's `when` condition follows the same language as any other node.
+
+A legacy single-contact or contact-list binding is one assignment. The old `Primary Trustee`, `Secondary Trustee`, and `Tertiary Trustee` bindings synthesize the `Successor Trustee` role, so a migrated plan still renders an existing client. A role with no assignment renders nothing and pushes a warning; the audit reports it as `missing_roles`.
+
 ## What It Does Not Do
 
 - It does not infer defined terms. Add terms manually for documents such as the Trust Agreement.
