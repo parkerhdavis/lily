@@ -59,6 +59,9 @@ pub struct DocumentPlan {
 	pub slots: HashMap<String, Slot>,
 	#[serde(default)]
 	pub terms: HashMap<String, Term>,
+	/// List-group definitions keyed by the `list` name used on blocks.
+	#[serde(default)]
+	pub lists: HashMap<String, ListGroup>,
 	/// Compiler metadata, including the source template path.
 	#[serde(default)]
 	pub metadata: Option<Value>,
@@ -83,9 +86,24 @@ pub struct Block {
 	/// the source paragraph's direct formatting.
 	#[serde(default)]
 	pub source_paragraph: Option<usize>,
+	/// The list group this block belongs to, when its trailing separator is
+	/// chosen from the enabled items rather than written into the content.
+	#[serde(default)]
+	pub list: Option<String>,
 	/// Rows of cells for a table block.
 	#[serde(default)]
 	pub rows: Vec<Vec<TableCell>>,
+}
+
+/// Separators for a group of blocks joined into one list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListGroup {
+	#[serde(default)]
+	pub separator: String,
+	#[serde(default)]
+	pub last_separator: String,
+	#[serde(default)]
+	pub terminator: String,
 }
 
 /// One cell in a table block. The content is inline; a cell with multiple
@@ -1621,6 +1639,7 @@ fn edit_body(
 		.collect();
 
 	let numbers = assign_numbers(plan, data)?;
+	let enabled = evaluate_block_conditions(plan, data)?;
 	let mut replacements: HashMap<usize, Option<String>> = HashMap::new();
 	let mut insertions: HashMap<usize, Vec<String>> = HashMap::new();
 	let mut before_first: Vec<String> = Vec::new();
@@ -1630,19 +1649,17 @@ fn edit_body(
 	let mut resolved = 0usize;
 
 	for block in &plan.blocks {
-		let enabled = match &block.when {
-			Some(condition) => eval_condition(condition, data)?,
-			None => true,
-		};
+		let block_enabled = enabled.get(&block.id).copied().unwrap_or(true);
 		match block_source_child(block, &paragraphs, children.len()) {
 			Some(index) if children[index].trim_start().starts_with("<w:p") => {
 				last_source = Some(index);
 				last_source_ordinal = paragraph_ordinal.get(&index).copied();
 				resolved += 1;
-				if enabled {
+				if block_enabled {
+					let effective = with_list_separator(block, plan, &enabled);
 					let edited = edit_paragraph(
 						&children[index],
-						block,
+						&effective,
 						plan,
 						data,
 						&numbers,
@@ -1658,7 +1675,7 @@ fn edit_body(
 				last_source = Some(index);
 				last_source_ordinal = None;
 				resolved += 1;
-				if enabled {
+				if block_enabled {
 					let rendered =
 						render_block(block, plan, data, &numbers, sources, warnings)?;
 					replacements.insert(index, Some(rendered));
@@ -1667,8 +1684,9 @@ fn edit_body(
 					replacements.insert(index, None);
 				}
 			}
-			None if enabled => {
-				let mut formatted = block.clone();
+			None if block_enabled => {
+				let effective = with_list_separator(block, plan, &enabled);
+				let mut formatted = effective.clone();
 				if formatted.source_paragraph.is_none() {
 					formatted.source_paragraph = last_source_ordinal;
 				}
@@ -1730,6 +1748,79 @@ fn render_block(
 	}
 }
 
+/// Evaluate every block's condition once, so a list group can see which
+/// items survive before any of them are rendered.
+fn evaluate_block_conditions(
+	plan: &DocumentPlan,
+	data: &DataView,
+) -> Result<HashMap<String, bool>, String> {
+	let mut enabled = HashMap::new();
+	for block in &plan.blocks {
+		let value = match &block.when {
+			Some(condition) => eval_condition(condition, data)?,
+			None => true,
+		};
+		enabled.insert(block.id.clone(), value);
+	}
+	Ok(enabled)
+}
+
+/// Choose the separator that follows a list item. The item before the last
+/// enabled item takes the conjunction, and the last item takes the
+/// terminator, so an omitted item cannot leave a dangling semicolon.
+fn list_separator(
+	block: &Block,
+	plan: &DocumentPlan,
+	enabled: &HashMap<String, bool>,
+) -> String {
+	let Some(group_name) = block.list.as_deref() else {
+		return String::new();
+	};
+	if !enabled.get(&block.id).copied().unwrap_or(true) {
+		return String::new();
+	}
+	let Some(group) = plan.lists.get(group_name) else {
+		return String::new();
+	};
+	let Some(position) = plan
+		.blocks
+		.iter()
+		.position(|candidate| candidate.id == block.id)
+	else {
+		return String::new();
+	};
+	let mut following = 0usize;
+	for candidate in plan.blocks.iter().skip(position + 1) {
+		if candidate.list.as_deref() == Some(group_name)
+			&& enabled.get(&candidate.id).copied().unwrap_or(true)
+		{
+			following += 1;
+		}
+	}
+	match following {
+		0 => group.terminator.clone(),
+		1 => group.last_separator.clone(),
+		_ => group.separator.clone(),
+	}
+}
+
+fn with_list_separator(
+	block: &Block,
+	plan: &DocumentPlan,
+	enabled: &HashMap<String, bool>,
+) -> Block {
+	let separator = list_separator(block, plan, enabled);
+	if separator.is_empty() {
+		return block.clone();
+	}
+	let mut effective = block.clone();
+	effective.content.push(ContentNode::Text {
+		text: separator,
+		marks: Vec::new(),
+	});
+	effective
+}
+
 /// Render the plan's blocks to WordprocessingML body content.
 pub fn render_body(
 	plan: &DocumentPlan,
@@ -1738,15 +1829,15 @@ pub fn render_body(
 	warnings: &mut Vec<String>,
 ) -> Result<(String, usize), String> {
 	let numbers = assign_numbers(plan, data)?;
+	let enabled = evaluate_block_conditions(plan, data)?;
 	let mut body = String::new();
 	let mut count = 0;
 	for block in &plan.blocks {
-		if let Some(condition) = &block.when {
-			if !eval_condition(condition, data)? {
-				continue;
-			}
+		if !enabled.get(&block.id).copied().unwrap_or(true) {
+			continue;
 		}
-		body.push_str(&render_block(block, plan, data, &numbers, sources, warnings)?);
+		let effective = with_list_separator(block, plan, &enabled);
+		body.push_str(&render_block(&effective, plan, data, &numbers, sources, warnings)?);
 		count += 1;
 	}
 	Ok((body, count))
@@ -2082,11 +2173,13 @@ mod tests {
 				when: None,
 				numbering: None,
 				source_paragraph: None,
+				list: None,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
 			slots: HashMap::new(),
 			terms: HashMap::new(),
+			lists: HashMap::new(),
 			metadata: None,
 		};
 		let mut warnings = Vec::new();
@@ -2116,11 +2209,13 @@ mod tests {
 				when: None,
 				numbering: None,
 				source_paragraph: None,
+				list: None,
 				rows: vec![],
 			}],
 			clauses: HashMap::new(),
 			slots: HashMap::new(),
 			terms: HashMap::new(),
+			lists: HashMap::new(),
 			metadata: None,
 		};
 		let mut warnings = Vec::new();
@@ -2161,11 +2256,13 @@ mod tests {
 				when: None,
 				numbering: None,
 				source_paragraph: None,
+				list: None,
 				rows: vec![],
 			}],
 			clauses,
 			slots: HashMap::new(),
 			terms: HashMap::new(),
+			lists: HashMap::new(),
 			metadata: None,
 		};
 		let mut warnings = Vec::new();
@@ -2234,6 +2331,7 @@ mod tests {
 			when: None,
 			numbering: numbering.map(|value| value.to_string()),
 			source_paragraph: None,
+			list: None,
 			rows: vec![],
 		}
 	}
@@ -2249,6 +2347,7 @@ mod tests {
 			clauses: HashMap::new(),
 			slots: HashMap::new(),
 			terms: HashMap::new(),
+			lists: HashMap::new(),
 			metadata: None,
 		}
 	}
@@ -2339,6 +2438,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: None,
+			list: None,
 			rows: vec![
 				vec![
 					TableCell {
@@ -2472,6 +2572,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2498,6 +2599,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2539,6 +2641,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2564,6 +2667,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let remove = Block {
@@ -2574,6 +2678,7 @@ mod tests {
 			when: Some(json!({"eq": ["has_spouse", false]})),
 			numbering: None,
 			source_paragraph: Some(1),
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2599,6 +2704,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let extra = Block {
@@ -2609,6 +2715,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: None,
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2634,6 +2741,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let text = Block {
@@ -2644,6 +2752,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(1),
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2668,6 +2777,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: None,
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2688,6 +2798,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2717,6 +2828,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: Some(0),
+			list: None,
 			rows: vec![],
 		};
 		let inserted = Block {
@@ -2727,6 +2839,7 @@ mod tests {
 			when: None,
 			numbering: None,
 			source_paragraph: None,
+			list: None,
 			rows: vec![],
 		};
 		let mut warnings = Vec::new();
@@ -2744,6 +2857,56 @@ mod tests {
 		assert!(paragraph.contains("<w:jc w:val=\"both\"/>"));
 		assert!(paragraph.contains("Times New Roman"));
 		assert!(!paragraph.contains("w:pStyle"));
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn list_separators_follow_enabled_items() {
+		fn list_block(id: &str, value: &str) -> Block {
+			Block {
+				id: id.to_string(),
+				kind: "paragraph".to_string(),
+				style: String::new(),
+				content: vec![text_node(value)],
+				when: None,
+				numbering: None,
+				source_paragraph: None,
+				list: Some("letters".to_string()),
+				rows: vec![],
+			}
+		}
+		fn body_text(body: &str) -> String {
+			let pattern = regex::Regex::new(r"(?s)<w:t[^>]*>(.*?)</w:t>").unwrap();
+			pattern
+				.captures_iter(body)
+				.map(|captures| captures[1].to_string())
+				.collect::<Vec<_>>()
+				.join("")
+		}
+		fn group() -> ListGroup {
+			ListGroup {
+				separator: "; ".to_string(),
+				last_separator: "; and ".to_string(),
+				terminator: ".".to_string(),
+			}
+		}
+
+		let mut all = test_plan(vec![list_block("a", "A"), list_block("b", "B"), list_block("c", "C")]);
+		all.lists.insert("letters".to_string(), group());
+		let mut warnings = Vec::new();
+		let (body, _) = render_body(&all, &view(), &[], &mut warnings).unwrap();
+		assert_eq!(body_text(&body), "A; B; and C.");
+
+		let mut middle_off = test_plan(vec![list_block("a", "A"), list_block("b", "B"), list_block("c", "C")]);
+		middle_off.lists.insert("letters".to_string(), group());
+		middle_off.blocks[1].when = Some(json!({"eq": ["has_spouse", false]}));
+		let (body, _) = render_body(&middle_off, &view(), &[], &mut warnings).unwrap();
+		assert_eq!(body_text(&body), "A; and C.");
+
+		let mut single = test_plan(vec![list_block("c", "C")]);
+		single.lists.insert("letters".to_string(), group());
+		let (body, _) = render_body(&single, &view(), &[], &mut warnings).unwrap();
+		assert_eq!(body_text(&body), "C.");
 		assert!(warnings.is_empty());
 	}
 
