@@ -1337,28 +1337,58 @@ fn edit_paragraph(
 	}
 
 	let mut cursor = 0usize;
-	let mut groups: Vec<(usize, Vec<String>, Vec<Segment>)> = Vec::new();
-	for segment in segments {
-		let assigned = match &segment {
-			Segment::Text { text, .. } if text.is_empty() => continue,
-			Segment::Text { text, .. } => match find_text(&items, cursor, text) {
+	let mut assignments: Vec<(usize, Segment)> = Vec::new();
+	for segment in &segments {
+		match segment {
+			Segment::Text { text, .. } if text.is_empty() => {}
+			Segment::Text { text, marks } => match find_text(&items, cursor, text) {
 				Some(position) => {
-					cursor = position + text.chars().count();
-					run_of[position]
+					let length = text.chars().count();
+					cursor = position + length;
+					// A single plan text node can span several source runs with
+					// different formatting. Split it at each run boundary so
+					// each slice inherits the formatting of the run it covers.
+					let mut start = 0usize;
+					let mut current = run_of[position];
+					for offset in 0..length {
+						let run = run_of[position + offset];
+						if run != current {
+							let piece: String =
+								text.chars().skip(start).take(offset - start).collect();
+							assignments.push((
+								current,
+								Segment::Text {
+									text: piece,
+									marks: marks.clone(),
+								},
+							));
+							start = offset;
+							current = run;
+						}
+					}
+					let piece: String = text.chars().skip(start).take(length - start).collect();
+					assignments.push((
+						current,
+						Segment::Text {
+							text: piece,
+							marks: marks.clone(),
+						},
+					));
 				}
-				None => run_at(&run_of, cursor),
+				None => assignments.push((run_at(&run_of, cursor), segment.clone())),
 			},
 			Segment::Tab => {
-				match (cursor..items.len()).find(|index| items[*index] == SourceItem::Tab) {
+				let run = match (cursor..items.len()).find(|index| items[*index] == SourceItem::Tab) {
 					Some(position) => {
 						cursor = position + 1;
 						run_of[position]
 					}
 					None => run_at(&run_of, cursor),
-				}
+				};
+				assignments.push((run, Segment::Tab));
 			}
 			Segment::Break { page } => {
-				match (cursor..items.len()).find(|index| {
+				let run = match (cursor..items.len()).find(|index| {
 					matches!(items[*index], SourceItem::Break { page: source } if source == *page)
 				}) {
 					Some(position) => {
@@ -1366,9 +1396,14 @@ fn edit_paragraph(
 						run_of[position]
 					}
 					None => run_at(&run_of, cursor),
-				}
+				};
+				assignments.push((run, Segment::Break { page: *page }));
 			}
-		};
+		}
+	}
+
+	let mut groups: Vec<(usize, Vec<String>, Vec<Segment>)> = Vec::new();
+	for (assigned, segment) in assignments {
 		let marks = segment_marks(&segment);
 		if let Some(last) = groups.last_mut() {
 			if last.0 == assigned && last.1 == marks {
@@ -2566,6 +2601,35 @@ mod tests {
 		let result =
 			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings).unwrap();
 		assert!(result.is_none(), "unmatched plans must use the rebuild path");
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn in_place_editing_splits_text_across_source_runs() {
+		let document = r#"<w:document><w:body><w:p><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:t>Title</w:t></w:r><w:r><w:t>. Body text.</w:t></w:r></w:p></w:body></w:document>"#;
+		let block = Block {
+			id: "block-000".to_string(),
+			kind: "paragraph".to_string(),
+			style: String::new(),
+			content: vec![text_node("Title. Body text.")],
+			when: None,
+			numbering: None,
+			source_paragraph: Some(0),
+			rows: vec![],
+		};
+		let mut warnings = Vec::new();
+		let (edited, _) =
+			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings)
+				.unwrap()
+				.expect("body is editable");
+		let underlined = edited
+			.split("<w:u w:val=\"single\"/>")
+			.nth(1)
+			.expect("underline present");
+		let underlined_run = underlined.split("</w:r>").next().expect("run");
+		assert!(underlined_run.contains("Title"));
+		assert!(!underlined_run.contains("Body"));
+		assert!(edited.contains(". Body text."));
 		assert!(warnings.is_empty());
 	}
 
