@@ -708,6 +708,198 @@ def command_plan_audit(args) -> None:
 		print(f"  - {entry['where']}: {entry['condition']} -> {result} ({values})")
 
 
+def plan_skeleton(plan_path: Path, plan: dict, override) -> Path:
+	if override:
+		skeleton = Path(override).expanduser().resolve()
+	else:
+		layout = plan.get("layout")
+		if not layout:
+			fail("Plan has no layout; pass --skeleton")
+		skeleton = (plan_path.parent / layout).resolve()
+	if not skeleton.is_file():
+		fail(f"Skeleton not found: {skeleton}")
+	return skeleton
+
+
+def render_plan_file(
+	plan_path: Path, client_dir: Path, skeleton: Path, output: Path
+) -> dict:
+	binary = resolve_render_binary()
+	if not binary.is_file():
+		fail(
+			f"lily-render not found: {binary}\n"
+			"Build it with: cargo build --bin lily-render (from apps/desktop/backend)"
+		)
+	command = [
+		str(binary),
+		"--plan",
+		str(plan_path),
+		"--client-dir",
+		str(client_dir),
+		"--skeleton",
+		str(skeleton),
+		"--output",
+		str(output),
+		"--json",
+	]
+	result = subprocess.run(command, capture_output=True, text=True)
+	if result.returncode != 0:
+		fail(result.stderr.strip() or f"lily-render exited {result.returncode}")
+	try:
+		return json.loads(result.stdout)
+	except json.JSONDecodeError:
+		return {"output": str(output), "warnings": []}
+
+
+def document_diff(left: Path, right: Path) -> str:
+	left_lines, left_meta = extract_document_text(left)
+	right_lines, right_meta = extract_document_text(right)
+	return "".join(
+		difflib.unified_diff(
+			render_diff_snapshot(left_lines, left_meta).splitlines(keepends=True),
+			render_diff_snapshot(right_lines, right_meta).splitlines(keepends=True),
+			fromfile=str(left),
+			tofile=str(right),
+		)
+	)
+
+
+def command_draft(args) -> None:
+	plan_path = Path(args.plan).expanduser().resolve()
+	if not plan_path.is_file():
+		fail(f"Plan not found: {plan_path}")
+	plan = read_json(plan_path)
+	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
+	variables, lists = audit_variables(client)
+	audit = audit_plan(plan, variables, lists)
+	skeleton = plan_skeleton(plan_path, plan, args.skeleton)
+
+	output_dir = Path(args.output_dir).expanduser().resolve()
+	output_dir.mkdir(parents=True, exist_ok=True)
+	candidate = output_dir / "candidate.docx"
+	render = render_plan_file(plan_path, client_path.parent, skeleton, candidate)
+
+	previous = None
+	if args.previous:
+		previous = Path(args.previous).expanduser().resolve()
+		if not previous.is_file():
+			fail(f"Previous document not found: {previous}")
+	diff = document_diff(previous, candidate) if previous else ""
+
+	audit_path = output_dir / "audit.json"
+	render_path = output_dir / "render.json"
+	diff_path = output_dir / "diff.txt"
+	audit_path.write_text(json.dumps(audit, indent=2) + "\n")
+	render_path.write_text(json.dumps(render, indent=2) + "\n")
+	diff_path.write_text(diff)
+
+	flags: list[str] = []
+	for entry in audit["slots"]["empty"]:
+		if entry["required"]:
+			flags.append(f"Required slot missing: {entry['name']}")
+		elif entry["kind"] == "missing":
+			flags.append(f"Optional slot empty: {entry['name']}")
+	for condition in audit["conditions"]:
+		if condition["result"] is None:
+			flags.append(
+				"Condition has an unknown value: "
+				f"{condition['where']} {json.dumps(condition['condition'], ensure_ascii=False)}"
+			)
+	for warning in render.get("warnings", []):
+		flags.append(f"Render warning: {warning}")
+	changed = sum(
+		1
+		for line in diff.splitlines()
+		if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+	)
+	if previous:
+		flags.append(f"{changed} changed line(s) against {previous.name}")
+
+	review_lines = [
+		f"# Draft Review — {plan.get('id', 'plan')}",
+		"",
+		f"- Client: `{client_path}`",
+		f"- Plan: `{plan_path}`",
+		f"- Candidate: `{candidate}`",
+		f"- Previous: `{previous}`" if previous else "- Previous: none",
+		"",
+		"## Data Gaps",
+		"",
+	]
+	required = [entry for entry in audit["slots"]["empty"] if entry["required"]]
+	gaps = [
+		entry
+		for entry in audit["slots"]["empty"]
+		if not entry["required"] and entry["kind"] == "missing"
+	]
+	for entry in required:
+		review_lines.append(f"- Required: {entry['name']} ({entry['kind']})")
+	for entry in gaps:
+		review_lines.append(f"- Optional: {entry['name']}")
+	if not required and not gaps:
+		review_lines.append("None.")
+	computed = [
+		entry for entry in audit["slots"]["empty"] if entry["kind"] == "computed"
+	]
+	review_lines += ["", "## Computed Values", ""]
+	if computed:
+		for entry in computed:
+			review_lines.append(f"- {entry['name']} (verify after render)")
+	else:
+		review_lines.append("None.")
+	review_lines += ["", "## Conditions", ""]
+	if audit["conditions"]:
+		for condition in audit["conditions"]:
+			result = {True: "true", False: "false", None: "unknown"}[condition["result"]]
+			review_lines.append(
+				f"- `{condition['where']}`: "
+				f"`{json.dumps(condition['condition'], ensure_ascii=False)}` -> **{result}**"
+			)
+	else:
+		review_lines.append("None.")
+	review_lines += ["", "## Render", ""]
+	if render.get("blocks_rendered") is not None:
+		review_lines.append(f"- Blocks rendered: {render['blocks_rendered']}")
+	if render.get("warnings"):
+		for warning in render["warnings"]:
+			review_lines.append(f"- Warning: {warning}")
+	else:
+		review_lines.append("- No warnings.")
+	review_lines += ["", "## Diff", ""]
+	if previous and diff:
+		review_lines += ["```diff", diff.rstrip("\n"), "```"]
+	elif previous:
+		review_lines.append(f"No textual differences against `{previous}`.")
+	else:
+		review_lines.append("No previous document supplied.")
+	review_lines += ["", "## Flags", ""]
+	if flags:
+		for flag in flags:
+			review_lines.append(f"- {flag}")
+	else:
+		review_lines.append("None.")
+	review_path = output_dir / "review.md"
+	review_path.write_text("\n".join(review_lines) + "\n")
+
+	summary = {
+		"plan": str(plan_path),
+		"client": str(client_path),
+		"candidate": str(candidate),
+		"review": str(review_path),
+		"audit": str(audit_path),
+		"render": str(render_path),
+		"diff": str(diff_path) if previous else None,
+		"flags": flags,
+		"render_warnings": render.get("warnings", []),
+	}
+	if args.json:
+		print(json.dumps(summary, indent=2))
+	else:
+		print(f"Draft review: {review_path}")
+		for flag in flags:
+			print(f"  - {flag}")
+
+
 def command_plan_render(args) -> None:
 	binary = resolve_render_binary()
 	if not binary.is_file():
@@ -847,6 +1039,21 @@ def build_parser() -> argparse.ArgumentParser:
 	plan_audit.add_argument("--client-dir", required=True, help="Client folder containing the .lily file")
 	plan_audit.add_argument("--json", action="store_true", help="Print the audit report as JSON")
 	plan_audit.set_defaults(func=command_plan_audit)
+
+	draft = subparsers.add_parser(
+		"draft", help="Produce a draft review bundle: audit, candidate, diff, and flags"
+	)
+	draft.add_argument("--plan", required=True, help="Path to the plan JSON")
+	draft.add_argument("--client-dir", required=True, help="Client folder containing the .lily file")
+	draft.add_argument(
+		"--output-dir", required=True, help="Directory for candidate.docx and the review files"
+	)
+	draft.add_argument("--previous", help="Existing document to diff against")
+	draft.add_argument(
+		"--skeleton", help="Layout skeleton .docx; defaults to the plan's layout path"
+	)
+	draft.add_argument("--json", action="store_true", help="Print the bundle summary as JSON")
+	draft.set_defaults(func=command_draft)
 
 	compile_command = subparsers.add_parser(
 		"compile", help="Compile a template into a document plan"

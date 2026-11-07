@@ -15,11 +15,13 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
 
 ## Loop
 
-1. **Audit.** Run `scripts/lily plan audit --plan <plan> --client-dir <client> --json`. Read the used slots, the empty values, and the condition results. The audit marks a value `computed` when the renderer derives it from contacts or facts; it marks `missing` when no slot value exists.
+1. **Audit.** Run `scripts/lily draft --plan <plan> --client-dir <client> --output-dir .tmp/draft/<name> --previous <existing.docx> --json`. One command writes the candidate, `review.md`, `audit.json`, `render.json`, and `diff.txt`. Read `review.md` first; it carries the data gaps, condition results, render warnings, diff, and flags.
 2. **Resolve gaps.** A missing client value is a question for the attorney, not a guess. A missing prose slot such as distribution instructions or a special bequest may be drafted only from the client's own answers and must be flagged for review. A missing clause is a gap: propose it, do not invent legal text.
-3. **Render.** Run `scripts/lily plan render --plan <plan> --client-dir <client> --output .tmp/draft/<name>.docx --json`. The render warnings are authoritative for required slots and unresolved references.
-4. **Diff.** Run `scripts/lily docx diff <existing> .tmp/draft/<name>.docx`. Read every changed paragraph. A diff is either a data fill, a condition flip, a clause selection, or a flagged prose edit; anything else is a defect.
-5. **Review bundle.** Return the candidate document, the audit, the diff, and a short flag list. Do not overwrite the client's document or mark the draft final.
+3. **Inspect the individual steps** when the bundle needs a closer look:
+   - `scripts/lily plan audit --plan <plan> --client-dir <client> --json`
+   - `scripts/lily plan render --plan <plan> --client-dir <client> --output .tmp/draft/<name>.docx --json`
+   - `scripts/lily docx diff <existing.docx> .tmp/draft/<name>.docx`
+4. **Review bundle.** Return the candidate document, the audit, the diff, and a short flag list. Do not overwrite the client's document or mark the draft final.
 
 ## Rules
 
@@ -42,14 +44,14 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
 ## Commands
 
 ```bash
-# Audit a plan against a client
-scripts/lily plan audit --plan <plan.json> --client-dir <client-dir> --json
+# One-command review bundle
+scripts/lily draft --plan <plan.json> --client-dir <client-dir> \
+  --output-dir .tmp/draft/<name> --previous <existing.docx> --json
 
-# Render a candidate
+# Individual steps
+scripts/lily plan audit --plan <plan.json> --client-dir <client-dir> --json
 scripts/lily plan render --plan <plan.json> --client-dir <client-dir> \
   --output .tmp/draft/<name>.docx --json
-
-# Read or compare documents
 scripts/lily docx text .tmp/draft/<name>.docx
 scripts/lily docx diff <existing.docx> .tmp/draft/<name>.docx
 ```
