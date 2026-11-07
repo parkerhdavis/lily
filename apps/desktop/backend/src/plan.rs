@@ -2275,7 +2275,7 @@ fn read_plan_file(plan_path: &Path) -> Result<DocumentPlan, String> {
 /// Replace excerpt blocks with the blocks of the plan they point to, so an
 /// audit reports data gaps inside a selected excerpt. Excerpt block ids are
 /// prefixed with the parent block id; clause references keep their own names.
-fn inline_excerpts(plan: &DocumentPlan) -> Result<DocumentPlan, String> {
+fn inline_excerpts(plan: &DocumentPlan, data: &DataView) -> Result<DocumentPlan, String> {
 	let mut expanded = DocumentPlan {
 		blocks: Vec::new(),
 		..plan.clone()
@@ -2285,12 +2285,17 @@ fn inline_excerpts(plan: &DocumentPlan) -> Result<DocumentPlan, String> {
 			expanded.blocks.push(block.clone());
 			continue;
 		}
+		if let Some(condition) = &block.when {
+			if !eval_condition(condition, data)? {
+				continue;
+			}
+		}
 		let Some(path) = &block.path else {
 			return Err(format!("Excerpt block '{}' has no path", block.id));
 		};
 		let excerpt_path = plan.base_dir.join(path);
 		let excerpt = read_plan_file(&excerpt_path)?;
-		let nested = inline_excerpts(&excerpt)?;
+		let nested = inline_excerpts(&excerpt, data)?;
 		for mut child in nested.blocks {
 			child.id = format!("{}:{}", block.id, child.id);
 			expanded.blocks.push(child);
@@ -2308,10 +2313,10 @@ fn inline_excerpts(plan: &DocumentPlan) -> Result<DocumentPlan, String> {
 #[tauri::command]
 pub fn audit_plan_document(plan_path: String, client_dir: String) -> Result<PlanAudit, String> {
 	let plan = read_plan_file(Path::new(&plan_path))?;
-	let plan = inline_excerpts(&plan)?;
 	lily_file::resolve_contact_variables(client_dir.clone())?;
 	let lily = lily_file::read_lily_file(&client_dir)?;
 	let view = DataView::from_lily(&lily);
+	let plan = inline_excerpts(&plan, &view)?;
 	Ok(audit_plan(&plan, &view))
 }
 
@@ -3529,7 +3534,7 @@ mod tests {
 		excerpt_block.path = Some("excerpt.plan.json".to_string());
 		let mut plan = test_plan(vec![excerpt_block]);
 		plan.base_dir = directory.clone();
-		let expanded = inline_excerpts(&plan).expect("expanded plan");
+		let expanded = inline_excerpts(&plan, &view()).expect("expanded plan");
 		assert_eq!(expanded.blocks.len(), 1);
 		assert_eq!(expanded.blocks[0].id, "excerpt:child");
 		let audit = audit_plan(&expanded, &view());
@@ -3537,6 +3542,13 @@ mod tests {
 		assert_eq!(audit.missing_slots.len(), 1);
 		assert_eq!(audit.conditions.len(), 1);
 		assert_eq!(audit.conditions[0].location, "excerpt:child");
+
+		let mut skipped = test_plan(vec![test_block("excerpt", "excerpt", vec![], None)]);
+		skipped.base_dir = directory.clone();
+		skipped.blocks[0].path = Some("excerpt.plan.json".to_string());
+		skipped.blocks[0].when = Some(json!({"eq": ["has_spouse", false]}));
+		let expanded = inline_excerpts(&skipped, &view()).expect("expanded plan");
+		assert!(expanded.blocks.is_empty());
 		std::fs::remove_dir_all(&directory).ok();
 	}
 

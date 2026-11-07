@@ -553,7 +553,13 @@ def evaluate_condition(condition, variables: dict, lists: dict):
 	return None
 
 
-def expand_excerpts(plan: dict, base_dir: Path, prefix: str = "") -> dict:
+def expand_excerpts(
+	plan: dict,
+	base_dir: Path,
+	variables: dict,
+	lists: dict,
+	prefix: str = "",
+) -> dict:
 	"""Inline excerpt blocks so an audit sees the data gaps inside them."""
 	expanded = copy.deepcopy(plan)
 	blocks = []
@@ -564,6 +570,9 @@ def expand_excerpts(plan: dict, base_dir: Path, prefix: str = "") -> dict:
 			block["id"] = f"{prefix}{block_id}"
 			blocks.append(block)
 			continue
+		condition = block.get("when")
+		if condition is not None and evaluate_condition(condition, variables, lists) is not True:
+			continue
 		path = block.get("path")
 		if not path:
 			fail(f"Excerpt block '{block_id}' has no path")
@@ -572,7 +581,11 @@ def expand_excerpts(plan: dict, base_dir: Path, prefix: str = "") -> dict:
 			fail(f"Excerpt not found: {excerpt_path}")
 		excerpt = read_json(excerpt_path)
 		nested = expand_excerpts(
-			excerpt, excerpt_path.parent, prefix=f"{prefix}{block_id}:"
+			excerpt,
+			excerpt_path.parent,
+			variables,
+			lists,
+			prefix=f"{prefix}{block_id}:",
 		)
 		blocks.extend(nested.get("blocks", []))
 		clauses = expanded.setdefault("clauses", {})
@@ -707,9 +720,10 @@ def command_plan_audit(args) -> None:
 	plan_path = Path(args.plan).expanduser().resolve()
 	if not plan_path.is_file():
 		fail(f"Plan not found: {plan_path}")
-	plan = expand_excerpts(read_json(plan_path), plan_path.parent)
+	plan = read_json(plan_path)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
 	variables, lists = audit_variables(client)
+	plan = expand_excerpts(plan, plan_path.parent, variables, lists)
 	report = audit_plan(plan, variables, lists)
 	report["client"] = str(client_path)
 	if args.json:
@@ -805,7 +819,9 @@ def command_draft(args) -> None:
 	plan = read_json(plan_path)
 	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
 	variables, lists = audit_variables(client)
-	audit = audit_plan(expand_excerpts(plan, plan_path.parent), variables, lists)
+	audit = audit_plan(
+		expand_excerpts(plan, plan_path.parent, variables, lists), variables, lists
+	)
 	skeleton = plan_skeleton(plan_path, plan, args.skeleton)
 
 	output_dir = Path(args.output_dir).expanduser().resolve()
