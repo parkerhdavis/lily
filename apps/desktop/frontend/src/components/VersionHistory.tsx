@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useWorkflowStore } from "@/stores/workflowStore";
-import type { DocumentVersion } from "@/types";
+import type { DocumentDiffLine, DocumentVersion } from "@/types";
 
 interface VersionHistoryProps {
 	documentPath: string | null;
@@ -13,6 +13,9 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 	const [error, setError] = useState<string | null>(null);
 	const [open, setOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
+	const [diff, setDiff] = useState<DocumentDiffLine[] | null>(null);
+	const [diffVersion, setDiffVersion] = useState<DocumentVersion | null>(null);
+	const diffDialogRef = useRef<HTMLDialogElement>(null);
 	const restoreVersion = useWorkflowStore((state) => state.restoreVersion);
 
 	const load = useCallback(async () => {
@@ -33,6 +36,24 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 	}, [load]);
 
 	if (!documentPath) return null;
+
+	const compare = async (version: DocumentVersion) => {
+		setBusy(true);
+		try {
+			const lines = await invoke<DocumentDiffLine[]>("diff_document_versions", {
+				docxPath: documentPath,
+				snapshotPath: version.path,
+			});
+			setDiff(lines);
+			setDiffVersion(version);
+			setError(null);
+			diffDialogRef.current?.showModal();
+		} catch (err) {
+			setError(String(err));
+		} finally {
+			setBusy(false);
+		}
+	};
 
 	const restore = async (version: DocumentVersion) => {
 		if (
@@ -80,14 +101,24 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 									{Math.max(1, Math.round(version.size / 1024))} KB
 								</p>
 							</div>
-							<button
-								type="button"
-								className="btn btn-ghost btn-xs"
-								disabled={busy}
-								onClick={() => void restore(version)}
-							>
-								Restore
-							</button>
+							<div className="flex shrink-0 gap-1">
+								<button
+									type="button"
+									className="btn btn-ghost btn-xs"
+									disabled={busy}
+									onClick={() => void compare(version)}
+								>
+									Compare
+								</button>
+								<button
+									type="button"
+									className="btn btn-ghost btn-xs"
+									disabled={busy}
+									onClick={() => void restore(version)}
+								>
+									Restore
+								</button>
+							</div>
 						</div>
 					))}
 					{versions.length > 10 && (
@@ -108,6 +139,58 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 					</button>
 				</div>
 			)}
+
+			<dialog ref={diffDialogRef} className="modal">
+				<div className="modal-box max-w-3xl">
+					<h3 className="text-lg font-semibold">
+						Changes from {diffVersion?.modified ?? "the selected version"}
+					</h3>
+					<p className="mt-1 text-xs text-base-content/60">
+						Lines marked − were in that version; lines marked + are in the
+						current document.
+					</p>
+					<div className="mt-3 max-h-[60vh] overflow-auto rounded border border-base-300 bg-base-100 p-3 font-mono text-xs">
+						{diff?.map((line, index) => (
+							<div
+								key={`${index}-${line.kind}`}
+								className={
+									line.kind === "added"
+										? "bg-success/10 text-success"
+										: line.kind === "removed"
+											? "bg-error/10 text-error"
+											: "text-base-content/70"
+								}
+							>
+								<span className="inline-block w-4 select-none">
+									{line.kind === "added"
+										? "+"
+										: line.kind === "removed"
+											? "−"
+											: " "}
+								</span>
+								<span className="whitespace-pre-wrap break-words">
+									{line.text}
+								</span>
+							</div>
+						))}
+						{diff && diff.length === 0 && (
+							<p className="text-base-content/50">No changes.</p>
+						)}
+					</div>
+					<div className="modal-action">
+						<button
+							type="button"
+							className="btn btn-sm"
+							onClick={() => diffDialogRef.current?.close()}
+						>
+							Close
+						</button>
+					</div>
+				</div>
+				<form method="dialog" className="modal-backdrop">
+					<button type="submit">close</button>
+				</form>
+			</dialog>
 		</div>
 	);
 }

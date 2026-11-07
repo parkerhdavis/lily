@@ -25,6 +25,10 @@ use crate::lily_file;
 static T_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"<w:t(?: [^>]*)?>([^<]*)</w:t>"#).expect("invalid regex"));
 
+/// Whole `<w:p ...>...</w:p>` paragraph.
+static PARAGRAPH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<w:p(?:\s[^>]*)?>.*?</w:p>").expect("invalid regex"));
+
 /// `<w:rPr>...</w:rPr>` with the contents captured.
 static RPR_CAPTURE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?s)<w:rPr>(.*?)</w:rPr>"#).expect("invalid regex"));
@@ -829,6 +833,41 @@ fn prune_empty_conditional_paragraphs(xml: &str) -> String {
     }
     result.push_str(&xml[last_end..]);
     result
+}
+
+/// Extract the non-empty paragraph text from a document, in order. Used by
+/// the version diff; tables contribute their paragraph text.
+pub fn document_lines(docx_path: &Path) -> Result<Vec<String>, String> {
+    let bytes = fs::read(docx_path)
+        .map_err(|error| format!("Failed to read {}: {}", docx_path.display(), error))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| format!("Failed to open docx as zip: {}", error))?;
+    let mut xml = String::new();
+    archive
+        .by_name("word/document.xml")
+        .map_err(|error| format!("Failed to read document.xml: {}", error))?
+        .read_to_string(&mut xml)
+        .map_err(|error| format!("Failed to read document.xml: {}", error))?;
+    let mut lines = Vec::new();
+    for paragraph in PARAGRAPH_RE.find_iter(&xml) {
+        let mut text = String::new();
+        for capture in T_RE.captures_iter(paragraph.as_str()) {
+            text.push_str(&unescape_text(&capture[1]));
+        }
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+    }
+    Ok(lines)
+}
+
+fn unescape_text(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// Get an HTML representation of the .docx for preview purposes.

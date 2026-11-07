@@ -293,6 +293,12 @@ export interface DocumentVersion {
 	size: number;
 }
 
+/** One line in a version comparison. */
+export interface DocumentDiffLine {
+	kind: "same" | "added" | "removed";
+	text: string;
+}
+
 /** A node in the template folder tree. */
 export type TemplateTreeNode =
 	| { kind: "folder"; name: string; children: TemplateTreeNode[] }

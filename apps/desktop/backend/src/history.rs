@@ -180,11 +180,11 @@ pub fn list_versions_into(
         .collect())
 }
 
-pub fn restore_version_into(
+fn resolve_snapshot(
     docx_path: &Path,
     snapshot_path: &Path,
     root: &Path,
-) -> Result<(), String> {
+) -> Result<PathBuf, String> {
     let Some(client_dir) = docx_path.parent() else {
         return Err("Document has no parent directory".to_string());
     };
@@ -197,12 +197,101 @@ pub fn restore_version_into(
     if !snapshot.starts_with(&directory) {
         return Err("Snapshot is outside the document's history".to_string());
     }
+    Ok(snapshot)
+}
+
+pub fn restore_version_into(
+    docx_path: &Path,
+    snapshot_path: &Path,
+    root: &Path,
+) -> Result<(), String> {
+    let snapshot = resolve_snapshot(docx_path, snapshot_path, root)?;
     let bytes = fs::read(&snapshot)
         .map_err(|error| format!("Failed to read snapshot: {}", error))?;
     snapshot_into(docx_path, root)?;
     fs::write(docx_path, bytes)
         .map_err(|error| format!("Failed to restore document: {}", error))?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionDiffLine {
+    pub kind: String,
+    pub text: String,
+}
+
+fn diff_lines(old: &[String], new: &[String]) -> Vec<VersionDiffLine> {
+    let n = old.len();
+    let m = new.len();
+    let mut table = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            table[i][j] = if old[i] == new[j] {
+                table[i + 1][j + 1] + 1
+            } else {
+                table[i + 1][j].max(table[i][j + 1])
+            };
+        }
+    }
+    let mut output = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if old[i] == new[j] {
+            output.push(VersionDiffLine {
+                kind: "same".to_string(),
+                text: old[i].clone(),
+            });
+            i += 1;
+            j += 1;
+        } else if table[i + 1][j] >= table[i][j + 1] {
+            output.push(VersionDiffLine {
+                kind: "removed".to_string(),
+                text: old[i].clone(),
+            });
+            i += 1;
+        } else {
+            output.push(VersionDiffLine {
+                kind: "added".to_string(),
+                text: new[j].clone(),
+            });
+            j += 1;
+        }
+    }
+    while i < n {
+        output.push(VersionDiffLine {
+            kind: "removed".to_string(),
+            text: old[i].clone(),
+        });
+        i += 1;
+    }
+    while j < m {
+        output.push(VersionDiffLine {
+            kind: "added".to_string(),
+            text: new[j].clone(),
+        });
+        j += 1;
+    }
+    output
+}
+
+pub fn diff_versions_into(
+    docx_path: &Path,
+    snapshot_path: &Path,
+    root: &Path,
+) -> Result<Vec<VersionDiffLine>, String> {
+    let snapshot = resolve_snapshot(docx_path, snapshot_path, root)?;
+    let old = crate::docx_ops::document_lines(&snapshot)?;
+    let new = crate::docx_ops::document_lines(docx_path)?;
+    Ok(diff_lines(&old, &new))
+}
+
+#[tauri::command]
+pub fn diff_document_versions(
+    docx_path: String,
+    snapshot_path: String,
+) -> Result<Vec<VersionDiffLine>, String> {
+    let root = history_root()?;
+    diff_versions_into(Path::new(&docx_path), Path::new(&snapshot_path), &root)
 }
 
 /// Copy the current document into the local history before a render overwrites
@@ -291,5 +380,21 @@ mod tests {
         assert!(after.len() >= 2);
         fs::remove_dir_all(&source_dir).ok();
         fs::remove_dir_all(&history).ok();
+    }
+
+    #[test]
+    fn diff_lines_marks_added_and_removed() {
+        let old = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let new = vec!["a".to_string(), "x".to_string(), "c".to_string()];
+        let diff = diff_lines(&old, &new);
+        assert!(diff
+            .iter()
+            .any(|line| line.kind == "removed" && line.text == "b"));
+        assert!(diff
+            .iter()
+            .any(|line| line.kind == "added" && line.text == "x"));
+        assert!(diff
+            .iter()
+            .any(|line| line.kind == "same" && line.text == "a"));
     }
 }
