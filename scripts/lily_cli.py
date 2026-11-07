@@ -423,6 +423,265 @@ def command_compile(args) -> None:
 			print(f"  warning: {warning}")
 
 
+def audit_variables(client: dict) -> dict:
+	variables = dict(client.get("variables", {}))
+	contacts = client.get("contacts", [])
+	children = [contact for contact in contacts if contact.get("relationship") == "Child"]
+	spouse = next(
+		(contact for contact in contacts if contact.get("relationship") == "Spouse"),
+		None,
+	)
+	variables["children_count"] = str(len(children))
+	variables["Has Spouse"] = "true" if spouse is not None else "false"
+	variables["Client has Children"] = "true" if children else "false"
+	variables["Has Minor Children"] = (
+		"true" if any(contact.get("is_minor") for contact in children) else "false"
+	)
+	if spouse is not None:
+		variables["Client Spouse Name"] = spouse.get("full_name", "")
+
+	has_spouse = str(variables.get("Has Spouse", "")).strip().lower() == "true"
+	spouse_name = variables.get("Client Spouse Name", "")
+	helpers = (
+		("Settlor Term", "Settlors", "Settlor"),
+		("Settlor Possessive", "Settlors\u2019", "Settlor\u2019s"),
+		("Settlor Verb", "are", "is"),
+		("Settlor Have", "have", "has"),
+		("Settlor Verb Past", "were", "was"),
+		("Settlor Each", "each Settlor", "Settlor"),
+	)
+	for name, plural, singular in helpers:
+		variables[name] = plural if has_spouse else singular
+	variables["And Spouse Name"] = (
+		f" and {spouse_name}" if has_spouse and spouse_name else ""
+	)
+	return variables
+
+
+def lookup_variable(variables: dict, name: str):
+	if name in variables:
+		return variables[name]
+	lowered = name.lower()
+	for key, value in variables.items():
+		if key.lower() == lowered:
+			return value
+	return None
+
+
+def condition_variables(condition) -> set[str]:
+	if not isinstance(condition, dict):
+		return set()
+	names: set[str] = set()
+	for key in ("eq", "neq"):
+		pair = condition.get(key)
+		if isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], str):
+			names.add(pair[0])
+	for key in ("and", "or"):
+		for child in condition.get(key) or []:
+			names |= condition_variables(child)
+	if "not" in condition:
+		names |= condition_variables(condition["not"])
+	if isinstance(condition.get("exists"), str):
+		names.add(condition["exists"])
+	return names
+
+
+def evaluate_condition(condition, variables: dict):
+	if isinstance(condition, bool):
+		return condition
+	if not isinstance(condition, dict):
+		return None
+	if "eq" in condition or "neq" in condition:
+		key = "eq" if "eq" in condition else "neq"
+		pair = condition.get(key)
+		if not isinstance(pair, list) or len(pair) != 2:
+			return None
+		name, expected = pair
+		actual = lookup_variable(variables, name)
+		if actual is None:
+			return None
+		if isinstance(expected, bool):
+			result = (str(actual).strip().lower() == "true") == expected
+		elif isinstance(expected, (int, float)):
+			try:
+				result = float(actual) == float(expected)
+			except (TypeError, ValueError):
+				return None
+		else:
+			result = str(actual) == str(expected)
+		return result if key == "eq" else not result
+	if "and" in condition:
+		results = [evaluate_condition(child, variables) for child in condition.get("and") or []]
+		if any(result is False for result in results):
+			return False
+		return None if any(result is None for result in results) else True
+	if "or" in condition:
+		results = [evaluate_condition(child, variables) for child in condition.get("or") or []]
+		if any(result is True for result in results):
+			return True
+		return None if any(result is None for result in results) else False
+	if "not" in condition:
+		result = evaluate_condition(condition["not"], variables)
+		return None if result is None else not result
+	if isinstance(condition.get("exists"), str):
+		value = lookup_variable(variables, condition["exists"])
+		return bool(value) if value is not None else False
+	return None
+
+
+def collect_plan_references(plan: dict) -> dict:
+	slots: list[str] = []
+	clause_refs: set[str] = set()
+	terms: set[str] = set()
+	refs: list[str] = []
+	conditions: list[tuple[str, object]] = []
+
+	def visit(node, where: str) -> None:
+		if isinstance(node, dict):
+			if isinstance(node.get("slot"), str):
+				slots.append(node["slot"])
+			if isinstance(node.get("clause"), str):
+				clause_refs.add(node["clause"])
+			if isinstance(node.get("term"), str):
+				terms.add(node["term"])
+			if isinstance(node.get("ref"), str):
+				refs.append(node["ref"])
+			if node.get("when") is not None:
+				conditions.append((where, node["when"]))
+			for value in node.values():
+				visit(value, where)
+		elif isinstance(node, list):
+			for value in node:
+				visit(value, where)
+
+	for block in plan.get("blocks", []):
+		block_id = block.get("id", "?")
+		visit(block.get("content", []), block_id)
+		if block.get("when") is not None:
+			conditions.append((block_id, block["when"]))
+	for clause_id, clause in plan.get("clauses", {}).items():
+		visit(clause.get("body", []), f"clause:{clause_id}")
+		if clause.get("when") is not None:
+			conditions.append((f"clause:{clause_id}", clause["when"]))
+	return {
+		"slots": slots,
+		"clause_refs": sorted(clause_refs),
+		"terms": sorted(terms),
+		"refs": refs,
+		"conditions": conditions,
+	}
+
+
+def computed_slot(name: str) -> bool:
+	return (
+		name.startswith("Settlor ")
+		or name == "And Spouse Name"
+		or "Co-" in name
+		or name.endswith(" And Name")
+		or name.endswith(" And Phone")
+		or name.endswith(" Title")
+		or name.endswith(" Verb")
+	)
+
+
+def audit_plan(plan: dict, variables: dict) -> dict:
+	references = collect_plan_references(plan)
+	declared = plan.get("slots", {})
+	used = sorted(set(references["slots"]))
+	condition_names: set[str] = set()
+	for _, condition in references["conditions"]:
+		condition_names |= condition_variables(condition)
+	empty = []
+	for name in used:
+		value = lookup_variable(variables, name)
+		if value is not None and str(value) != "":
+			continue
+		declaration = declared.get(name, {})
+		empty.append(
+			{
+				"name": name,
+				"required": bool(declaration.get("required", False)),
+				"kind": "computed" if computed_slot(name) else "missing",
+				"value": "" if value is None else str(value),
+			}
+		)
+	conditions = []
+	seen = set()
+	for where, condition in references["conditions"]:
+		signature = json.dumps(condition, sort_keys=True, ensure_ascii=False)
+		if signature in seen:
+			continue
+		seen.add(signature)
+		names = sorted(condition_variables(condition))
+		values = {name: lookup_variable(variables, name) for name in names}
+		conditions.append(
+			{
+				"where": where,
+				"condition": condition,
+				"variables": names,
+				"values": values,
+				"result": evaluate_condition(condition, variables),
+			}
+		)
+	return {
+		"plan": {
+			"id": plan.get("id"),
+			"version": plan.get("version"),
+			"blocks": len(plan.get("blocks", [])),
+			"clauses": len(plan.get("clauses", {})),
+		},
+		"slots": {
+			"used": used,
+			"declared": sorted(declared),
+			"undeclared": sorted(set(used) - set(declared)),
+			"unused": sorted(set(declared) - set(used) - condition_names),
+			"empty": empty,
+		},
+		"conditions": conditions,
+		"terms": references["terms"],
+		"refs": sorted(set(references["refs"])),
+		"clause_refs": references["clause_refs"],
+	}
+
+
+def command_plan_audit(args) -> None:
+	plan_path = Path(args.plan).expanduser().resolve()
+	if not plan_path.is_file():
+		fail(f"Plan not found: {plan_path}")
+	plan = read_json(plan_path)
+	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
+	report = audit_plan(plan, audit_variables(client))
+	report["client"] = str(client_path)
+	if args.json:
+		print(json.dumps(report, indent=2))
+		return
+
+	meta = report["plan"]
+	print(f"Plan {meta['id']} v{meta['version']}: {meta['blocks']} blocks, {meta['clauses']} clauses")
+	slots = report["slots"]
+	print(f"Slots: {len(slots['used'])} used, {len(slots['declared'])} declared")
+	if slots["undeclared"]:
+		print("Undeclared slots:")
+		for name in slots["undeclared"]:
+			print(f"  - {name}")
+	if slots["unused"]:
+		print("Declared but unused:")
+		for name in slots["unused"]:
+			print(f"  - {name}")
+	if slots["empty"]:
+		print("Empty values:")
+		for entry in slots["empty"]:
+			required = "required" if entry["required"] else "optional"
+			print(f"  - {entry['name']} ({required}, {entry['kind']})")
+	else:
+		print("Empty values: none")
+	print("Conditions:")
+	for entry in report["conditions"]:
+		result = {True: "true", False: "false", None: "unknown"}[entry["result"]]
+		values = ", ".join(f"{name}={value!r}" for name, value in entry["values"].items())
+		print(f"  - {entry['where']}: {entry['condition']} -> {result} ({values})")
+
+
 def command_plan_render(args) -> None:
 	binary = resolve_render_binary()
 	if not binary.is_file():
@@ -554,6 +813,14 @@ def build_parser() -> argparse.ArgumentParser:
 	plan_render.add_argument("--output", required=True, help="Output .docx path")
 	plan_render.add_argument("--json", action="store_true", help="Print the render report as JSON")
 	plan_render.set_defaults(func=command_plan_render)
+	plan_audit = plan_sub.add_parser(
+		"audit",
+		help="Report slot coverage, empty values, and condition results for a client",
+	)
+	plan_audit.add_argument("--plan", required=True, help="Path to the plan JSON")
+	plan_audit.add_argument("--client-dir", required=True, help="Client folder containing the .lily file")
+	plan_audit.add_argument("--json", action="store_true", help="Print the audit report as JSON")
+	plan_audit.set_defaults(func=command_plan_audit)
 
 	compile_command = subparsers.add_parser(
 		"compile", help="Compile a template into a document plan"
