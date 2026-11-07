@@ -27,6 +27,7 @@ import argparse
 import difflib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -900,6 +901,68 @@ def command_draft(args) -> None:
 			print(f"  - {flag}")
 
 
+def command_layout(args) -> None:
+	docx_path = Path(args.docx).expanduser().resolve()
+	if not docx_path.is_file():
+		fail(f"Document not found: {docx_path}")
+	output_dir = Path(args.output_dir).expanduser().resolve()
+	output_dir.mkdir(parents=True, exist_ok=True)
+	soffice = shutil.which("soffice") or shutil.which("libreoffice")
+	if not soffice:
+		fail("LibreOffice (soffice) is not on PATH")
+	pdftoppm = shutil.which("pdftoppm")
+	if not pdftoppm:
+		fail("pdftoppm is not on PATH")
+	profile = output_dir / "lo-profile"
+	profile.mkdir(exist_ok=True)
+	convert = subprocess.run(
+		[
+			soffice,
+			"--headless",
+			f"-env:UserInstallation={profile.as_uri()}",
+			"--convert-to",
+			"pdf",
+			"--outdir",
+			str(output_dir),
+			str(docx_path),
+		],
+		capture_output=True,
+		text=True,
+	)
+	if convert.returncode != 0:
+		fail(convert.stderr.strip() or f"LibreOffice exited {convert.returncode}")
+	pdf_path = output_dir / f"{docx_path.stem}.pdf"
+	if not pdf_path.is_file():
+		fail(f"LibreOffice produced no PDF for {docx_path}")
+	for old in output_dir.glob("page-*.png"):
+		old.unlink()
+	prefix = output_dir / "page"
+	render = subprocess.run(
+		[pdftoppm, "-png", "-r", str(args.dpi), str(pdf_path), str(prefix)],
+		capture_output=True,
+		text=True,
+	)
+	if render.returncode != 0:
+		fail(render.stderr.strip() or f"pdftoppm exited {render.returncode}")
+	images = sorted(
+		output_dir.glob("page-*.png"),
+		key=lambda path: int(path.stem.rsplit("-", 1)[-1]),
+	)
+	report = {
+		"docx": str(docx_path),
+		"pdf": str(pdf_path),
+		"pages": len(images),
+		"images": [str(path) for path in images],
+	}
+	if args.json:
+		print(json.dumps(report, indent=2))
+	else:
+		print(f"Rendered {len(images)} page(s) from {docx_path.name}")
+		print(f"PDF: {pdf_path}")
+		for image in images:
+			print(image)
+
+
 def command_plan_render(args) -> None:
 	binary = resolve_render_binary()
 	if not binary.is_file():
@@ -1054,6 +1117,17 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	draft.add_argument("--json", action="store_true", help="Print the bundle summary as JSON")
 	draft.set_defaults(func=command_draft)
+
+	layout = subparsers.add_parser(
+		"layout", help="Render a document to PDF pages for layout review"
+	)
+	layout.add_argument("--docx", required=True, help="Document to render")
+	layout.add_argument(
+		"--output-dir", required=True, help="Directory for the PDF and page images"
+	)
+	layout.add_argument("--dpi", type=int, default=80, help="Page image resolution")
+	layout.add_argument("--json", action="store_true", help="Print the render report as JSON")
+	layout.set_defaults(func=command_layout)
 
 	compile_command = subparsers.add_parser(
 		"compile", help="Compile a template into a document plan"

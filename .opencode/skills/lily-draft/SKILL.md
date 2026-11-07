@@ -21,7 +21,14 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
    - `scripts/lily plan audit --plan <plan> --client-dir <client> --json`
    - `scripts/lily plan render --plan <plan> --client-dir <client> --output .tmp/draft/<name>.docx --json`
    - `scripts/lily docx diff <existing.docx> .tmp/draft/<name>.docx`
-4. **Review bundle.** Return the candidate document, the audit, the diff, and a short flag list. Do not overwrite the client's document or mark the draft final.
+4. **Layout review.** Render the candidate to page images with `scripts/lily layout --docx .tmp/draft/<name>.docx --output-dir .tmp/draft/<name>-pages`, then read the pages in order. Flag a heading or signature line separated from what it belongs to, a signature or notary block split across pages, a table split at a row boundary, and a page ending on a single line where the template keeps a paragraph together. Record the page number and the block or paragraph name.
+5. **Review bundle.** Return the candidate document, the audit, the diff, the layout findings, and a short flag list. Do not overwrite the client's document or mark the draft final.
+
+## Layout Review
+
+The renderer preserves the template's layout, but it does not decide page breaks. After the candidate renders, produce page images with `scripts/lily layout` and read them. The findings belong in the review bundle with page numbers and block names.
+
+The plan does not yet carry keep-with-next or page-break intents. Record the proposed intent in the review bundle and on the task that owns the layout pass; do not edit the template to force a break.
 
 ## Rules
 
@@ -47,6 +54,10 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
 # One-command review bundle
 scripts/lily draft --plan <plan.json> --client-dir <client-dir> \
   --output-dir .tmp/draft/<name> --previous <existing.docx> --json
+
+# Layout pages
+scripts/lily layout --docx .tmp/draft/<name>.docx \
+  --output-dir .tmp/draft/<name>-pages
 
 # Individual steps
 scripts/lily plan audit --plan <plan.json> --client-dir <client-dir> --json
