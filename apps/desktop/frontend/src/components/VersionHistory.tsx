@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import DiffView from "@/components/DiffView";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import type { DocumentDiffLine, DocumentVersion } from "@/types";
 
@@ -149,33 +150,8 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 						Lines marked − were in that version; lines marked + are in the
 						current document.
 					</p>
-					<div className="mt-3 max-h-[60vh] overflow-auto rounded border border-base-300 bg-base-100 p-3 font-mono text-xs">
-						{diff?.map((line, index) => (
-							<div
-								key={`${index}-${line.kind}`}
-								className={
-									line.kind === "added"
-										? "bg-success/10 text-success"
-										: line.kind === "removed"
-											? "bg-error/10 text-error"
-											: "text-base-content/70"
-								}
-							>
-								<span className="inline-block w-4 select-none">
-									{line.kind === "added"
-										? "+"
-										: line.kind === "removed"
-											? "−"
-											: " "}
-								</span>
-								<span className="whitespace-pre-wrap break-words">
-									{line.text}
-								</span>
-							</div>
-						))}
-						{diff && diff.length === 0 && (
-							<p className="text-base-content/50">No changes.</p>
-						)}
+					<div className="mt-3">
+						<DiffView diff={diff ?? []} />
 					</div>
 					<div className="modal-action">
 						<button

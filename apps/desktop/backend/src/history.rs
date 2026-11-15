@@ -285,6 +285,16 @@ pub fn diff_versions_into(
     Ok(diff_lines(&old, &new))
 }
 
+/// Compare two document files directly, without going through history.
+pub fn diff_document_pair_paths(
+    left: &Path,
+    right: &Path,
+) -> Result<Vec<VersionDiffLine>, String> {
+    let old = crate::docx_ops::document_lines(left)?;
+    let new = crate::docx_ops::document_lines(right)?;
+    Ok(diff_lines(&old, &new))
+}
+
 #[tauri::command]
 pub fn diff_document_versions(
     docx_path: String,

@@ -31,7 +31,10 @@ use questionnaire::{
     create_questionnaire, delete_questionnaire, duplicate_questionnaire, load_questionnaire,
     load_questionnaire_index, migrate_questionnaires, save_questionnaire,
 };
-use plan::{audit_plan_document, render_plan_document};
+use plan::{
+    approve_plan_candidate, audit_plan_document, discard_plan_candidate, render_plan_candidate,
+    render_plan_document,
+};
 use history::{
     diff_document_versions, list_document_versions, restore_document_version, snapshot_document,
 };
@@ -131,6 +134,9 @@ fn main() {
             list_templates,
             replace_variables_v2,
             render_plan_document,
+            render_plan_candidate,
+            approve_plan_candidate,
+            discard_plan_candidate,
             audit_plan_document,
             snapshot_document,
             list_document_versions,

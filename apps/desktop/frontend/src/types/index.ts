@@ -312,6 +312,18 @@ export interface DocumentDiffLine {
 	text: string;
 }
 
+/** A plan rendered to a temporary candidate, with its diff against the
+ *  current document. */
+export interface PlanCandidateReport {
+	candidate_path: string;
+	candidate_html: string;
+	diff: DocumentDiffLine[];
+	plan_id: string;
+	plan_version: number;
+	blocks_rendered: number;
+	warnings: string[];
+}
+
 /** A node in the template folder tree. */
 export type TemplateTreeNode =
 	| { kind: "folder"; name: string; children: TemplateTreeNode[] }

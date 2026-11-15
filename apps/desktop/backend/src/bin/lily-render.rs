@@ -11,6 +11,9 @@
 #[path = "../docx_ops.rs"]
 mod docx_ops;
 
+#[path = "../history.rs"]
+mod history;
+
 #[path = "../lily_file.rs"]
 mod lily_file;
 

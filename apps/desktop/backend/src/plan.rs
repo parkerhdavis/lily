@@ -16,6 +16,7 @@ use std::sync::LazyLock;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+use crate::history::VersionDiffLine;
 use crate::lily_file::{self, Contact, LilyFile, RoleAssignment};
 
 static SDT_RE: LazyLock<regex::Regex> =
@@ -2798,6 +2799,121 @@ pub fn render_plan(
 	})
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCandidateReport {
+	pub candidate_path: String,
+	pub candidate_html: String,
+	pub diff: Vec<VersionDiffLine>,
+	pub plan_id: String,
+	pub plan_version: u32,
+	pub blocks_rendered: usize,
+	pub warnings: Vec<String>,
+}
+
+fn candidate_output_path(docx: &Path) -> PathBuf {
+	let stem = docx
+		.file_stem()
+		.and_then(|value| value.to_str())
+		.unwrap_or("candidate");
+	let unique = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|duration| duration.as_nanos())
+		.unwrap_or(0);
+	std::env::temp_dir().join(format!("lily-candidate-{}-{}.docx", stem, unique))
+}
+
+fn ensure_candidate(path: &Path) -> Result<(), String> {
+	let name = path
+		.file_name()
+		.and_then(|value| value.to_str())
+		.unwrap_or("");
+	if !name.starts_with("lily-candidate-") {
+		return Err(format!("Not a Lily candidate: {}", path.display()));
+	}
+	Ok(())
+}
+
+/// Render the current plan and client data to a temporary document without
+/// touching the client's document. The candidate is shown with a diff so the
+/// attorney can approve it as the draft.
+#[tauri::command]
+pub fn render_plan_candidate(
+	docx_path: String,
+	plan_path: String,
+	skeleton_path: String,
+) -> Result<PlanCandidateReport, String> {
+	let docx = Path::new(&docx_path);
+	if !docx.is_file() {
+		return Err(format!("Document not found: {}", docx.display()));
+	}
+	let client_dir = docx
+		.parent()
+		.ok_or_else(|| "Document has no parent directory".to_string())?;
+	let candidate = candidate_output_path(docx);
+	let report = render_plan(
+		Path::new(&plan_path),
+		client_dir,
+		Path::new(&skeleton_path),
+		&candidate,
+	)
+	.inspect_err(|_| {
+		let _ = fs::remove_file(&candidate);
+	})?;
+	let candidate_html =
+		crate::docx_ops::get_document_html(candidate.to_string_lossy().to_string()).inspect_err(
+			|_| {
+				let _ = fs::remove_file(&candidate);
+			},
+		)?;
+	let diff = crate::history::diff_document_pair_paths(docx, &candidate).inspect_err(|_| {
+		let _ = fs::remove_file(&candidate);
+	})?;
+	Ok(PlanCandidateReport {
+		candidate_path: candidate.to_string_lossy().to_string(),
+		candidate_html,
+		diff,
+		plan_id: report.plan_id,
+		plan_version: report.plan_version,
+		blocks_rendered: report.blocks_rendered,
+		warnings: report.warnings,
+	})
+}
+
+/// Replace the client's document with an approved candidate. The current
+/// document is snapshotted first and the temporary candidate is removed.
+#[tauri::command]
+pub fn approve_plan_candidate(docx_path: String, candidate_path: String) -> Result<(), String> {
+	let docx = Path::new(&docx_path);
+	let candidate = Path::new(&candidate_path);
+	ensure_candidate(candidate)?;
+	if !candidate.is_file() {
+		return Err(format!("Candidate not found: {}", candidate.display()));
+	}
+	crate::history::snapshot_document_path(&docx_path)?;
+	let bytes = fs::read(candidate)
+		.map_err(|error| format!("Failed to read candidate {}: {}", candidate.display(), error))?;
+	fs::write(docx, bytes)
+		.map_err(|error| format!("Failed to write document {}: {}", docx.display(), error))?;
+	let _ = fs::remove_file(candidate);
+	Ok(())
+}
+
+#[tauri::command]
+pub fn discard_plan_candidate(candidate_path: String) -> Result<(), String> {
+	let candidate = Path::new(&candidate_path);
+	ensure_candidate(candidate)?;
+	if candidate.is_file() {
+		fs::remove_file(candidate).map_err(|error| {
+			format!(
+				"Failed to discard candidate {}: {}",
+				candidate.display(),
+				error
+			)
+		})?;
+	}
+	Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -4003,6 +4119,81 @@ mod tests {
 		let expanded = inline_excerpts(&skipped, &view()).expect("expanded plan");
 		assert!(expanded.blocks.is_empty());
 		std::fs::remove_dir_all(&directory).ok();
+	}
+
+	#[test]
+	fn candidate_paths_are_scoped_to_lily_candidates() {
+		let candidate = candidate_output_path(Path::new("/tmp/Last Will.docx"));
+		let name = candidate
+			.file_name()
+			.and_then(|value| value.to_str())
+			.unwrap_or("");
+		assert!(name.starts_with("lily-candidate-"));
+		assert!(name.ends_with(".docx"));
+		assert!(ensure_candidate(&candidate).is_ok());
+		assert!(ensure_candidate(Path::new("/tmp/Last Will.docx")).is_err());
+	}
+
+	fn write_minimal_docx(path: &Path, text: &str) {
+		let file = fs::File::create(path).expect("docx file");
+		let mut writer = ZipWriter::new(file);
+		let options =
+			SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+		writer
+			.start_file("word/document.xml", options)
+			.expect("document entry");
+		let xml = format!(
+			"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:r><w:t>{}</w:t></w:r></w:p><w:sectPr/></w:body></w:document>",
+			text
+		);
+		writer.write_all(xml.as_bytes()).expect("document xml");
+		writer.finish().expect("docx finish");
+	}
+
+	#[test]
+	fn render_candidate_returns_a_diff_and_a_html_preview() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("lily-candidate-test-{}", unique));
+		let client_dir = directory.join("client");
+		fs::create_dir_all(&client_dir).expect("client directory");
+		fs::write(
+			client_dir.join("Client.lily"),
+			r#"{"lily_type":"client","lily_version":4,"variables":{"Client Full Name":"Jane Doe"},"documents":{},"contacts":[],"contact_bindings":{}}"#,
+		)
+		.expect("client file");
+		let skeleton = directory.join("skeleton.docx");
+		write_minimal_docx(&skeleton, "Old text");
+		let document = client_dir.join("Will.docx");
+		fs::copy(&skeleton, &document).expect("document copy");
+		let plan_path = directory.join("plan.json");
+		fs::write(
+			&plan_path,
+			r#"{"lily_type":"document-plan","id":"candidate-test","version":1,"layout":"skeleton.docx","blocks":[{"id":"block-000","kind":"paragraph","style":"Normal","content":[{"text":"Hello "},{"slot":"Client Full Name"}]}]}"#,
+		)
+		.expect("plan file");
+
+		let report = render_plan_candidate(
+			document.to_string_lossy().to_string(),
+			plan_path.to_string_lossy().to_string(),
+			skeleton.to_string_lossy().to_string(),
+		)
+		.expect("candidate");
+		assert_eq!(report.plan_id, "candidate-test");
+		assert_eq!(report.blocks_rendered, 1);
+		assert!(report.candidate_html.contains("Hello Jane Doe"));
+		assert!(report
+			.diff
+			.iter()
+			.any(|line| line.kind == "removed" && line.text == "Old text"));
+		assert!(report
+			.diff
+			.iter()
+			.any(|line| line.kind == "added" && line.text == "Hello Jane Doe"));
+		discard_plan_candidate(report.candidate_path).expect("discard");
+		fs::remove_dir_all(&directory).ok();
 	}
 
 	#[test]

@@ -7,6 +7,7 @@ import StatusDot from "@/components/ui/StatusDot";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import { extractFilename } from "@/utils/path";
+import DraftCandidate from "./DraftCandidate";
 import DraftReadiness from "./DraftReadiness";
 import ContactRoleField from "./VariableEditor/ContactRoleField";
 import LinkedVariableField from "./VariableEditor/LinkedVariableField";
@@ -32,6 +33,7 @@ export default function VariableEditor() {
 		error,
 		lilyFile,
 		templateSchema,
+		templateRelPath,
 		updateVariable,
 		renameDocument,
 		saveDocument,
@@ -61,6 +63,10 @@ export default function VariableEditor() {
 		const separator = normalized.lastIndexOf("/");
 		return separator > 0 ? normalized.slice(0, separator) : null;
 	}, [documentPath]);
+	const skeletonPath = useMemo(() => {
+		if (!templateRelPath || !templatesDir) return null;
+		return `${templatesDir}/${templateRelPath}`;
+	}, [templateRelPath, templatesDir]);
 
 	// Current document filename (for looking up per-document overrides)
 	const currentFilename = useMemo(() => {
@@ -602,6 +608,11 @@ export default function VariableEditor() {
 						onMouseDown={handleDragStart}
 					/>
 					<DraftReadiness planPath={planPath} clientDir={clientDir} />
+					<DraftCandidate
+						planPath={planPath}
+						documentPath={documentPath}
+						skeletonPath={skeletonPath}
+					/>
 					<VersionHistory documentPath={documentPath} />
 					<SectionHeading className="mb-3">Variables</SectionHeading>
 					{variables.length > 0 && (
