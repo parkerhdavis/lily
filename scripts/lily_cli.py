@@ -695,6 +695,47 @@ def client_role_names(client: dict) -> dict[str, list[str]]:
 			legacy_names.extend(roles.get(role, []))
 		if legacy_names:
 			roles["Successor Trustee"] = legacy_names
+
+	def fold_tiers(target: str, tiers: list[tuple[str, str | None]]) -> None:
+		if target in roles:
+			return
+		legacy_names: list[str] = []
+		for parent, co in tiers:
+			legacy_names.extend(roles.get(parent, []))
+			if co:
+				legacy_names.extend(roles.get(co, []))
+		if legacy_names:
+			roles[target] = legacy_names
+
+	fold_tiers(
+		"Personal Representative",
+		[
+			("Primary Personal Representative", "Primary Co-Personal Representative"),
+			("Secondary Personal Representative", "Secondary Co-Personal Representative"),
+			("Tertiary Personal Representative", "Tertiary Co-Personal Representative"),
+		],
+	)
+	fold_tiers("Guardian", [("Primary Guardian", None), ("Secondary Guardian", None)])
+	fold_tiers(
+		"HPOA Agent",
+		[
+			("Primary HPOA Agent", "Primary HPOA Co-Agent"),
+			("Secondary HPOA Agent", "Secondary HPOA Co-Agent"),
+			("Tertiary HPOA Agent", "Tertiary HPOA Co-Agent"),
+		],
+	)
+	fold_tiers(
+		"FPOA Agent",
+		[
+			("Primary FPOA Agent", "Primary FPOA Co-Agent"),
+			("Secondary FPOA Agent", "Secondary FPOA Co-Agent"),
+			("Tertiary FPOA Agent", "Tertiary FPOA Co-Agent"),
+		],
+	)
+	fold_tiers(
+		"Deed Beneficiary",
+		[("Primary Beneficiary", None), ("Secondary Beneficiary", None)],
+	)
 	return roles
 
 

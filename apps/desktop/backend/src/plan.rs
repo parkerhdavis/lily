@@ -403,6 +403,10 @@ impl DataView {
 				view.roles.insert("Successor Trustee".to_string(), assignments);
 			}
 		}
+		// The agent tiers and their co-agents are bound as separate roles.
+		// Fold each tier into one shared assignment for the ordered agent role.
+		fold_tiered_agent_role(&mut view, lily, "HPOA Agent", "HPOA");
+		fold_tiered_agent_role(&mut view, lily, "FPOA Agent", "FPOA");
 		// The personal-representative tiers and their co-representatives are
 		// bound as separate roles. Fold each tier into one shared assignment
 		// for the ordered Personal Representative role.
@@ -468,6 +472,21 @@ impl DataView {
 						values: HashMap::new(),
 					}],
 				);
+			}
+		}
+		// Guardians are also bound as separate primary and secondary roles.
+		// Fold them into one ordered Guardian role.
+		if !view.roles.contains_key("Guardian") {
+			let mut assignments = Vec::new();
+			for role in ["Primary Guardian", "Secondary Guardian"] {
+				if let Some(binding) = lily.contact_bindings.get(role) {
+					if let Some(assignment) = binding_assignment(binding, &lily.variables) {
+						assignments.push(assignment);
+					}
+				}
+			}
+			if !assignments.is_empty() {
+				view.roles.insert("Guardian".to_string(), assignments);
 			}
 		}
 		view.lists.insert(
@@ -609,6 +628,41 @@ impl DataView {
 	}
 }
 
+/// Fold the legacy per-tier agent and co-agent bindings into one ordered role.
+/// Each tier becomes one assignment, and a tier's co-agent joins that
+/// assignment as a shared member.
+fn fold_tiered_agent_role(view: &mut DataView, lily: &LilyFile, role: &str, prefix: &str) {
+	if view.roles.contains_key(role) {
+		return;
+	}
+	let mut assignments = Vec::new();
+	for tier in ["Primary", "Secondary", "Tertiary"] {
+		let primary = format!("{} {} Agent", tier, prefix);
+		let co = format!("{} {} Co-Agent", tier, prefix);
+		let Some(binding) = lily.contact_bindings.get(&primary) else {
+			break;
+		};
+		let Some(mut assignment) = binding_assignment(binding, &lily.variables) else {
+			break;
+		};
+		if let Some(co_binding) = lily.contact_bindings.get(&co) {
+			if let Some(co_assignment) = binding_assignment(co_binding, &lily.variables) {
+				assignment.contact_ids.extend(co_assignment.contact_ids);
+				for (key, value) in co_assignment.values {
+					assignment.values.entry(key).or_insert(value);
+				}
+			}
+		}
+		if assignment.contact_ids.is_empty() && assignment.values.is_empty() {
+			break;
+		}
+		assignments.push(assignment);
+	}
+	if !assignments.is_empty() {
+		view.roles.insert(role.to_string(), assignments);
+	}
+}
+
 fn snake_case(name: &str) -> String {
 	name.chars()
 		.map(|character| {
@@ -680,6 +734,15 @@ pub fn eval_condition(condition: &Value, data: &DataView) -> Result<bool, String
 					.as_str()
 					.ok_or_else(|| "includes value must be a string".to_string())?;
 				Ok(data.get_list(name).iter().any(|value| value == needle))
+			} else if let Some(role) = map.get("has_role") {
+				let role = role
+					.as_str()
+					.ok_or_else(|| "has_role expects a role name".to_string())?;
+				Ok(data
+					.roles
+					.get(role)
+					.map(|assignments| !assignments.is_empty())
+					.unwrap_or(false))
 			} else if let Some(children) = map.get("and") {
 				let children = children
 					.as_array()
@@ -979,6 +1042,7 @@ fn render_role(
 		warnings.push(format!("No assignment for role: {}", role));
 		return String::new();
 	}
+	let phone_groups = data.role_names(role, "phone");
 	let mut output = String::new();
 	let mut previous: Option<String> = None;
 	let mut previous_names: Vec<String> = Vec::new();
@@ -994,6 +1058,14 @@ fn render_role(
 				.map(|name| name.to_uppercase())
 				.collect();
 			join_names(&upper, conjunction, separator, oxford)
+		};
+		let phones = phone_groups.get(index).cloned().unwrap_or_default();
+		let joined_phones = join_names(&phones, conjunction, separator, oxford);
+		let first_phone = phones.first().cloned().unwrap_or_default();
+		let phone_clause = if joined_phones.is_empty() {
+			String::new()
+		} else {
+			format!(", who can be reached at {}", joined_phones)
 		};
 		let template = if index == 0 {
 			if names.len() > 1 {
@@ -1022,6 +1094,9 @@ fn render_role(
 					.replace("{previous_upper}", &previous_upper)
 					.replace("{previous_verb}", previous_verb)
 					.replace("{previous_predecease}", previous_predecease)
+					.replace("{phone_clause}", &phone_clause)
+					.replace("{phones}", &joined_phones)
+					.replace("{phone}", &first_phone)
 					.replace("{role}", role);
 				output.push_str(&text);
 			}
@@ -3116,6 +3191,101 @@ mod tests {
 			"Settlors nominate Alice Adams and Bob Brown to serve as Co-Trustees. If Alice Adams and Bob Brown shall die, resign, or cease to act, Carol Clark shall serve as Trustee. "
 		);
 		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn has_role_condition_tracks_assignments() {
+		let view = role_view();
+		assert!(eval_condition(&json!({"has_role": "Successor Trustee"}), &view).unwrap());
+		assert!(!eval_condition(&json!({"has_role": "Guardian"}), &view).unwrap());
+	}
+
+	#[test]
+	fn role_phone_placeholders_follow_assignments() {
+		let mut lily = LilyFile::default();
+		let mut alice = role_contact("a", "Alice Adams");
+		alice.phone = "555-0100".to_string();
+		let mut bob = role_contact("b", "Bob Brown");
+		bob.phone = "555-0200".to_string();
+		let carol = role_contact("c", "Carol Clark");
+		lily.contacts = vec![alice, bob, carol];
+		lily.contact_bindings.insert(
+			"HPOA Agent".to_string(),
+			crate::lily_file::ContactBinding {
+				contact_id: None,
+				variable_mappings: HashMap::new(),
+				contact_ids: None,
+				assignments: Some(vec![
+					RoleAssignment {
+						contact_ids: vec!["a".to_string(), "b".to_string()],
+						values: HashMap::new(),
+					},
+					RoleAssignment {
+						contact_ids: vec!["c".to_string()],
+						values: HashMap::new(),
+					},
+				]),
+			},
+		);
+		let view = DataView::from_lily(&lily);
+		let mut warnings = Vec::new();
+		let text = render_role(
+			"HPOA Agent",
+			RoleWording {
+				property: "full_name",
+				intro: Some("I designate {names}{phone_clause}, to serve as my Healthcare Representative. "),
+				shared_intro: Some(
+					"I designate {names}{phone_clause}, to serve as my co-Healthcare Representatives. ",
+				),
+				successor: Some(
+					"If {previous_upper} {previous_predecease} me or {previous_verb} unable or unwilling to serve, I appoint {names_upper}{phone_clause}, to serve as my Healthcare Representative. ",
+				),
+				shared_successor: None,
+				conjunction: "and",
+				separator: ", ",
+				oxford: true,
+			},
+			&view,
+			&mut warnings,
+		);
+		assert_eq!(
+			text,
+			"I designate Alice Adams and Bob Brown, who can be reached at 555-0100 and 555-0200, to serve as my co-Healthcare Representatives. If ALICE ADAMS and BOB BROWN predecease me or are unable or unwilling to serve, I appoint CAROL CLARK, to serve as my Healthcare Representative. "
+		);
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn legacy_agent_tiers_fold_into_one_ordered_role() {
+		let mut lily = LilyFile::default();
+		lily.contacts = vec![
+			role_contact("a", "Alice Adams"),
+			role_contact("b", "Bob Brown"),
+			role_contact("c", "Carol Clark"),
+		];
+		for (role, contact) in [
+			("Primary HPOA Agent", "a"),
+			("Primary HPOA Co-Agent", "b"),
+			("Secondary HPOA Agent", "c"),
+		] {
+			lily.contact_bindings.insert(
+				role.to_string(),
+				crate::lily_file::ContactBinding {
+					contact_id: Some(contact.to_string()),
+					variable_mappings: HashMap::new(),
+					contact_ids: None,
+					assignments: None,
+				},
+			);
+		}
+		let view = DataView::from_lily(&lily);
+		assert_eq!(
+			view.role_names("HPOA Agent", "full_name"),
+			vec![
+				vec!["Alice Adams".to_string(), "Bob Brown".to_string()],
+				vec!["Carol Clark".to_string()],
+			]
+		);
 	}
 
 	#[test]
