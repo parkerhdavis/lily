@@ -448,6 +448,28 @@ impl DataView {
 					.insert("Personal Representative".to_string(), assignments);
 			}
 		}
+		// A deed designates its beneficiaries together, not in succession.
+		// Fold the Will's primary and secondary beneficiary roles into one
+		// shared assignment when the client has no deed-specific binding.
+		if !view.roles.contains_key("Deed Beneficiary") {
+			let mut contact_ids = Vec::new();
+			for role in ["Primary Beneficiary", "Secondary Beneficiary"] {
+				if let Some(binding) = lily.contact_bindings.get(role) {
+					if let Some(assignment) = binding_assignment(binding, &lily.variables) {
+						contact_ids.extend(assignment.contact_ids);
+					}
+				}
+			}
+			if !contact_ids.is_empty() {
+				view.roles.insert(
+					"Deed Beneficiary".to_string(),
+					vec![RoleAssignment {
+						contact_ids,
+						values: HashMap::new(),
+					}],
+				);
+			}
+		}
 		view.lists.insert(
 			"required_documents".to_string(),
 			lily.required_documents
@@ -1899,6 +1921,14 @@ fn edit_paragraph(
 		open.to_string()
 	};
 	let mut inner = apply_layout_hints(&parsed.ppr, block);
+	if parsed.runs.is_empty() {
+		if let Some(groups) = by_run.get(&0) {
+			for (marks, segments) in groups {
+				inner.push_str(&emit_segment_group("", marks, segments));
+			}
+		}
+		return Ok(format!("{}{}</w:p>", open, inner));
+	}
 	for (index, run) in parsed.runs.iter().enumerate() {
 		let groups = by_run.get(&index);
 		if groups.is_none() && run.extras.is_empty() {
@@ -3190,6 +3220,63 @@ mod tests {
 				vec!["Alice Adams".to_string(), "Bob Brown".to_string()],
 				vec!["Carol Clark".to_string()]
 			]
+		);
+	}
+
+	#[test]
+	fn empty_paragraph_content_is_inserted() {
+		let paragraph = "<w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr></w:p>";
+		let block = test_block(
+			"block-000",
+			"paragraph",
+			vec![ContentNode::Slot {
+				slot: "Client Full Name".to_string(),
+				format: None,
+				marks: vec![],
+			}],
+			None,
+		);
+		let plan = test_plan(vec![block.clone()]);
+		let mut warnings = Vec::new();
+		let result = edit_paragraph(
+			paragraph,
+			&block,
+			&plan,
+			&view(),
+			&HashMap::new(),
+			&mut warnings,
+		)
+		.expect("edited paragraph");
+		assert!(result.contains("Jane A. Doe"));
+		assert!(result.contains("<w:pStyle w:val=\"Normal\"/>"));
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn deed_beneficiaries_fold_into_one_shared_assignment() {
+		let mut lily = LilyFile::default();
+		lily.contacts = vec![
+			role_contact("a", "Alice Adams"),
+			role_contact("b", "Bob Brown"),
+		];
+		for (role, contact) in [
+			("Primary Beneficiary", "a"),
+			("Secondary Beneficiary", "b"),
+		] {
+			lily.contact_bindings.insert(
+				role.to_string(),
+				crate::lily_file::ContactBinding {
+					contact_id: Some(contact.to_string()),
+					variable_mappings: HashMap::new(),
+					contact_ids: None,
+					assignments: None,
+				},
+			);
+		}
+		let view = DataView::from_lily(&lily);
+		assert_eq!(
+			view.role_names("Deed Beneficiary", "full_name"),
+			vec![vec!["Alice Adams".to_string(), "Bob Brown".to_string()]]
 		);
 	}
 

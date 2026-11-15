@@ -44,6 +44,9 @@ export type QuestionDef =
 			 *  of a single contact. Each assignment is one person or a shared
 			 *  group, and the plan's role node chooses the legal wording. */
 			multiple?: boolean;
+			/** When true, only one shared assignment is allowed. Use this for
+			 *  roles that act together, such as deed beneficiaries. */
+			sharedOnly?: boolean;
 	  }
 	| {
 			kind: "contact-list";

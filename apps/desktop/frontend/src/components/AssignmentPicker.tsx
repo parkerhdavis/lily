@@ -182,13 +182,15 @@ export default function AssignmentPicker({
 				))}
 			</div>
 
-			<button
-				type="button"
-				className="btn btn-ghost btn-xs mt-2 self-start"
-				onClick={() => setDraft([...assignments, { contact_ids: [] }])}
-			>
-				+ Add successor
-			</button>
+			{!question.sharedOnly && (
+				<button
+					type="button"
+					className="btn btn-ghost btn-xs mt-2 self-start"
+					onClick={() => setDraft([...assignments, { contact_ids: [] }])}
+				>
+					+ Add successor
+				</button>
+			)}
 		</div>
 	);
 }
