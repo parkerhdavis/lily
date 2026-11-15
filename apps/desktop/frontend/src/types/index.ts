@@ -160,9 +160,21 @@ export interface ContactBinding {
 	assignments?: RoleAssignment[];
 }
 
+/** Where the client stands in the engagement workflow. */
+export type WorkflowStage =
+	| "intake"
+	| "questionnaire"
+	| "engagement"
+	| "signed"
+	| "drafting"
+	| "review"
+	| "complete";
+
 /** The .lily project file stored in each client/working directory. */
 export interface LilyFile {
 	lily_version: number;
+	/** Where the client stands in the engagement workflow. */
+	workflow_stage: WorkflowStage;
 	/** Client-level variable values shared across all documents. */
 	variables: Record<string, string>;
 	/** Display names of conditional (ternary) variables that render as

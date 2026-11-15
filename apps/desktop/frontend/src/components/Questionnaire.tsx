@@ -21,6 +21,7 @@ import type {
 	QuestionnaireSectionDef,
 } from "@/types/questionnaire";
 import { extractFolderName } from "@/utils/path";
+import { scopedQuestionnaireSections } from "@/utils/questionnaireScope";
 
 /** Status chip shown on every section row in the rail.
  *  Three visual states: empty (muted), partial (warning), complete (success). */
@@ -90,6 +91,14 @@ export default function Questionnaire() {
 	// Dynamic questionnaire definition
 	const [questionnaireDef, setQuestionnaireDef] =
 		useState<QuestionnaireSectionDef[]>(fallbackDef);
+	const scopedDef = useMemo(
+		() =>
+			scopedQuestionnaireSections(
+				questionnaireDef,
+				lilyFile?.required_documents,
+			),
+		[questionnaireDef, lilyFile?.required_documents],
+	);
 	const [questionnaireTabs, setQuestionnaireTabs] = useState(fallbackTabs);
 	// When the client has no questionnaire chosen yet, prompt the user to pick
 	// one (then remember it on the .lily file). New clients are stamped at
@@ -302,10 +311,10 @@ export default function Questionnaire() {
 	// Filter all sections by search query (across every tab)
 	const filteredSections = useMemo(() => {
 		const q = search.trim().toLowerCase();
-		if (!q) return questionnaireDef;
+		if (!q) return scopedDef;
 
 		const tokens = q.split(/\s+/);
-		return questionnaireDef.filter((section) => {
+		return scopedDef.filter((section) => {
 			if (tokens.every((t) => section.title.toLowerCase().includes(t)))
 				return true;
 			return section.questions.some((question) => {
@@ -318,7 +327,7 @@ export default function Questionnaire() {
 				return tokens.every((t) => label.toLowerCase().includes(t));
 			});
 		});
-	}, [questionnaireDef, search]);
+	}, [scopedDef, search]);
 
 	// Group filtered sections by tab for rail rendering, preserving tab order
 	const railGroups = useMemo(() => {
@@ -330,12 +339,18 @@ export default function Questionnaire() {
 			.filter((g) => g.sections.length > 0);
 	}, [filteredSections, questionnaireTabs]);
 
-	// Default-select the first section overall once defs are loaded
+	// Default-select the first section overall once defs are loaded, and fall
+	// back when the selected documents hide the current section.
 	useEffect(() => {
-		if (activeSectionTitle) return;
-		const first = questionnaireDef[0];
+		if (
+			activeSectionTitle &&
+			scopedDef.some((section) => section.title === activeSectionTitle)
+		) {
+			return;
+		}
+		const first = scopedDef[0];
 		if (first) setActiveSectionTitle(first.title);
-	}, [questionnaireDef, activeSectionTitle]);
+	}, [scopedDef, activeSectionTitle]);
 
 	// If search filters out the currently active section, jump to the first match
 	useEffect(() => {
@@ -349,7 +364,7 @@ export default function Questionnaire() {
 	}, [filteredSections, search, activeSectionTitle]);
 
 	const activeSection =
-		questionnaireDef.find((s) => s.title === activeSectionTitle) ??
+		scopedDef.find((s) => s.title === activeSectionTitle) ??
 		filteredSections[0] ??
 		null;
 	const activeIdx = activeSection
@@ -369,7 +384,7 @@ export default function Questionnaire() {
 	const stats = useMemo(() => {
 		let total = 0;
 		let filled = 0;
-		for (const section of questionnaireDef) {
+		for (const section of scopedDef) {
 			if (section.kind === "contacts") {
 				total++;
 				if (contacts.length > 0) filled++;
@@ -383,7 +398,7 @@ export default function Questionnaire() {
 			}
 		}
 		return { total, filled };
-	}, [variables, contacts, questionnaireDef]);
+	}, [variables, contacts, scopedDef]);
 
 	const bindings = lilyFile?.contact_bindings ?? {};
 
@@ -395,7 +410,7 @@ export default function Questionnaire() {
 			string,
 			{ total: number; filled: number; countText: string }
 		> = {};
-		for (const section of questionnaireDef) {
+		for (const section of scopedDef) {
 			if (section.kind === "contacts") {
 				const n = contacts.length;
 				map[section.title] = {
@@ -430,7 +445,7 @@ export default function Questionnaire() {
 			};
 		}
 		return map;
-	}, [variables, contacts, bindings, questionnaireDef]);
+	}, [variables, contacts, bindings, scopedDef]);
 
 	const folderName = workingDir ? extractFolderName(workingDir) : "Client";
 

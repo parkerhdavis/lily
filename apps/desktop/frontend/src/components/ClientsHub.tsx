@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ClientWorkflow from "@/components/ClientWorkflow";
 import CopyFromSpouseDialog from "@/components/CopyFromSpouseDialog";
 import MigrationDialog, {
 	type FieldMapping,
@@ -24,6 +25,7 @@ import type {
 	QuestionnaireSectionDef,
 } from "@/types/questionnaire";
 import { extractFilename, extractFolderName } from "@/utils/path";
+import { scopedQuestionnaireSections } from "@/utils/questionnaireScope";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -581,12 +583,17 @@ function ClientContentPane({
 			.sort((a, b) => a.filename.localeCompare(b.filename));
 	}, [lilyFile]);
 
+	const scopedQDef = useMemo(
+		() => scopedQuestionnaireSections(qDef, lilyFile.required_documents),
+		[qDef, lilyFile.required_documents],
+	);
+
 	const questionnaireStats = useMemo(() => {
 		const vars = lilyFile.variables ?? {};
 		const contactCount = lilyFile.contacts?.length ?? 0;
 		let total = 0;
 		let filled = 0;
-		for (const section of qDef) {
+		for (const section of scopedQDef) {
 			if (section.kind === "contacts") {
 				total++;
 				if (contactCount > 0) filled++;
@@ -600,7 +607,7 @@ function ClientContentPane({
 			}
 		}
 		return { total, filled };
-	}, [lilyFile, qDef]);
+	}, [lilyFile, scopedQDef]);
 
 	const handleApplyMigration = useCallback(
 		async (mappings: FieldMapping[], removeOrphaned: string[]) => {
@@ -905,6 +912,16 @@ function ClientContentPane({
 								)}
 							</div>
 						</button>
+
+						<ClientWorkflow
+							lilyFile={lilyFile}
+							questionnaireStats={questionnaireStats}
+							templatesDir={settings.templates_dir}
+							onOpenQuestionnaire={onOpenQuestionnaire}
+							onStartAddDocument={onStartAddDocument}
+							onOpenDocument={onOpenDocument}
+							onAddMultipleDocuments={onAddMultipleDocuments}
+						/>
 
 						{/* Documents section */}
 						<div>

@@ -21,6 +21,23 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 				for (const w of lilyFile.warnings ?? []) {
 					useToastStore.getState().addToast("warning", w);
 				}
+				// Clients created before the selection spine existed have
+				// documents but no required-document entries. Link them once;
+				// once a selection exists, new documents are linked as they
+				// are added.
+				if ((lilyFile.required_documents ?? []).length === 0) {
+					invoke<number>("backfill_required_documents", {
+						workingDir: dir,
+					})
+						.then((changed) => {
+							if (changed > 0 && get().workingDir === dir) {
+								void get().reloadLilyFile();
+							}
+						})
+						.catch((err) =>
+							console.error("Failed to backfill required documents:", err),
+						);
+				}
 			})
 			.catch((err) => console.error("Failed to load .lily file:", err));
 	},
@@ -36,6 +53,20 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 			set({ lilyFile });
 		} catch (err) {
 			console.error("Failed to reload .lily file:", err);
+		}
+	},
+
+	setWorkflowStage: async (stage) => {
+		const { workingDir } = get();
+		if (!workingDir) return;
+		try {
+			await invoke("set_workflow_stage", { workingDir, stage });
+			await get().reloadLilyFile();
+		} catch (err) {
+			console.error("Failed to set workflow stage:", err);
+			useToastStore
+				.getState()
+				.addToast("error", `Failed to update the engagement stage: ${err}`);
 		}
 	},
 

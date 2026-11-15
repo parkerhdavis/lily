@@ -186,6 +186,15 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 					conditionalDefinitions: {},
 				});
 
+				// The selection spine: every drafted document is also a
+				// required-document entry, linked to the file it produced.
+				await invoke("ensure_required_document", {
+					workingDir,
+					templateRelPath,
+					documentFilename: filename,
+					status: "drafting",
+				});
+
 				addedDocs.push({ docPath, templateRelPath, variables });
 			}
 

@@ -8,6 +8,7 @@ import type {
 	TextOccurrence,
 	VariableInfo,
 	VariableSchema,
+	WorkflowStage,
 	WorkflowStep,
 } from "@/types";
 
@@ -75,6 +76,7 @@ export interface WorkflowState {
 	// Project actions
 	setWorkingDir: (dir: string) => void;
 	reloadLilyFile: () => Promise<void>;
+	setWorkflowStage: (stage: WorkflowStage) => Promise<void>;
 	saveQuestionnaireNote: (
 		section: string,
 		noteKind: "client" | "internal",

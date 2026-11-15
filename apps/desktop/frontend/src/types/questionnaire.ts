@@ -82,6 +82,9 @@ export interface QuestionnaireSectionDef {
 	kind?: "standard" | "contacts";
 	/** Which tab this section belongs to. */
 	tab: "client-info" | "contacts" | "assignments";
+	/** Template paths this section applies to. Omitted means the section is
+	 *  shown for every engagement; an empty array means the same. */
+	documents?: string[];
 	questions: QuestionDef[];
 }
 

@@ -165,6 +165,27 @@ pub struct SectionNotes {
     pub internal: String,
 }
 
+/// Where the client stands in the engagement workflow.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStage {
+    /// The attorney is still scoping the engagement.
+    #[default]
+    Intake,
+    /// Documents are selected and the questionnaire is in progress.
+    Questionnaire,
+    /// The questionnaire is complete and the engagement letter is being prepared.
+    Engagement,
+    /// The engagement letter is signed.
+    Signed,
+    /// The selected documents are being drafted.
+    Drafting,
+    /// The drafts are with the attorney for review.
+    Review,
+    /// Everything is executed or ready to close.
+    Complete,
+}
+
 /// Top-level `.lily` project file that lives in each client/working directory.
 /// Acts as both a configuration file and (via OS file-type association) a
 /// project launcher — analogous to Unreal Engine's `.uproject` files.
@@ -178,6 +199,9 @@ pub struct LilyFile {
     pub lily_type: Option<String>,
     /// Schema version for forward compatibility.
     pub lily_version: u32,
+    /// Where the client stands in the engagement workflow.
+    #[serde(default)]
+    pub workflow_stage: WorkflowStage,
     /// Client-level variable values shared across all documents.
     pub variables: HashMap<String, String>,
     /// DEPRECATED: conditional variable names are now determined by the
@@ -258,6 +282,7 @@ impl Default for LilyFile {
         Self {
             lily_type: Some("client".to_string()),
             lily_version: CURRENT_VERSION,
+            workflow_stage: WorkflowStage::default(),
             variables: HashMap::new(),
             conditional_variables: Vec::new(),
             conditional_definitions: HashMap::new(),
@@ -1422,6 +1447,98 @@ pub fn check_document_consistency(working_dir: String) -> Result<ConsistencyRepo
 }
 
 // ─── Required document CRUD ──────────────────────────────────────────────
+
+/// Set the client's place in the engagement workflow.
+#[tauri::command]
+pub fn set_workflow_stage(working_dir: String, stage: WorkflowStage) -> Result<(), String> {
+    let mut lily = read_lily_file(&working_dir)?;
+    lily.workflow_stage = stage;
+    write_lily_file(&working_dir, &lily)
+}
+
+/// Link a drafted document to the selection entry for its template. If the
+/// selection has not been recorded yet, add the entry. This is the bridge
+/// between `required_documents` (the client's plan) and the actual `.docx`.
+#[tauri::command]
+pub fn ensure_required_document(
+    working_dir: String,
+    template_rel_path: String,
+    document_filename: String,
+    status: DocumentStatus,
+) -> Result<RequiredDocument, String> {
+    let mut lily = read_lily_file(&working_dir)?;
+    let position = lily.required_documents.iter().position(|document| {
+        document.template_rel_path == template_rel_path
+            && document
+                .document_filename
+                .as_deref()
+                .is_none_or(|filename| filename == document_filename)
+    });
+    let document = if let Some(index) = position {
+        &mut lily.required_documents[index]
+    } else {
+        lily.required_documents.push(RequiredDocument {
+            id: Uuid::new_v4().to_string(),
+            template_rel_path: template_rel_path.clone(),
+            status: status.clone(),
+            document_filename: Some(document_filename.clone()),
+            notes: String::new(),
+        });
+        lily.required_documents
+            .last_mut()
+            .expect("required document just pushed")
+    };
+    document.template_rel_path = template_rel_path;
+    document.document_filename = Some(document_filename);
+    document.status = status;
+    let result = document.clone();
+    write_lily_file(&working_dir, &lily)?;
+    Ok(result)
+}
+
+/// Backfill the selection spine for clients created before required documents
+/// were linked to their drafted files. Existing entries are linked rather than
+/// duplicated, and the number of changed entries is returned.
+#[tauri::command]
+pub fn backfill_required_documents(working_dir: String) -> Result<usize, String> {
+    let mut lily = read_lily_file(&working_dir)?;
+    let documents: Vec<(String, String)> = lily
+        .documents
+        .iter()
+        .map(|(filename, meta)| (filename.clone(), meta.template_rel_path.clone()))
+        .collect();
+    let mut changed = 0;
+    for (filename, template_rel_path) in documents {
+        let position = lily.required_documents.iter().position(|document| {
+            document.template_rel_path == template_rel_path
+                && document
+                    .document_filename
+                    .as_deref()
+                    .is_none_or(|existing| existing == filename)
+        });
+        if let Some(index) = position {
+            let document = &mut lily.required_documents[index];
+            if document.document_filename.is_none() {
+                document.document_filename = Some(filename);
+                document.status = DocumentStatus::Drafting;
+                changed += 1;
+            }
+        } else {
+            lily.required_documents.push(RequiredDocument {
+                id: Uuid::new_v4().to_string(),
+                template_rel_path,
+                status: DocumentStatus::Drafting,
+                document_filename: Some(filename),
+                notes: String::new(),
+            });
+            changed += 1;
+        }
+    }
+    if changed > 0 {
+        write_lily_file(&working_dir, &lily)?;
+    }
+    Ok(changed)
+}
 
 /// Add a required document to the client's .lily file.
 #[tauri::command]
@@ -2665,5 +2782,52 @@ mod tests {
             .any(|name| name == &format!("{}/Will.docx", prefix)));
         std::fs::remove_dir_all(&client).ok();
         std::fs::remove_file(&archive).ok();
+    }
+
+    #[test]
+    fn workflow_stage_defaults_and_serializes_in_snake_case() {
+        assert_eq!(LilyFile::default().workflow_stage, WorkflowStage::Intake);
+        assert_eq!(
+            serde_json::to_string(&WorkflowStage::Questionnaire).expect("stage json"),
+            "\"questionnaire\""
+        );
+    }
+
+    #[test]
+    fn ensure_required_document_links_and_reuses_the_selection() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("lily-required-{}", unique));
+        std::fs::create_dir_all(&directory).expect("client folder");
+        let working = directory.to_string_lossy().to_string();
+        write_lily_file(&working, &LilyFile::default()).expect("lily file");
+
+        let first = ensure_required_document(
+            working.clone(),
+            "03 - Will Templates/Last Will and Testament Template.docx".to_string(),
+            "Will.docx".to_string(),
+            DocumentStatus::Drafting,
+        )
+        .expect("first link");
+        assert_eq!(first.document_filename.as_deref(), Some("Will.docx"));
+
+        let second = ensure_required_document(
+            working.clone(),
+            "03 - Will Templates/Last Will and Testament Template.docx".to_string(),
+            "Will.docx".to_string(),
+            DocumentStatus::Reviewing,
+        )
+        .expect("second link");
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.status, DocumentStatus::Reviewing);
+
+        set_workflow_stage(working.clone(), WorkflowStage::Signed).expect("stage");
+        let loaded = read_lily_file(&working).expect("reload");
+        assert_eq!(loaded.required_documents.len(), 1);
+        assert_eq!(loaded.required_documents[0].status, DocumentStatus::Reviewing);
+        assert_eq!(loaded.workflow_stage, WorkflowStage::Signed);
+        std::fs::remove_dir_all(&directory).ok();
     }
 }
