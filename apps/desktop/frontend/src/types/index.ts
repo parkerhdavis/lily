@@ -170,11 +170,16 @@ export type WorkflowStage =
 	| "review"
 	| "complete";
 
+/** Who the current engagement stage is waiting on. */
+export type WorkflowWaitingOn = "none" | "attorney" | "client";
+
 /** The .lily project file stored in each client/working directory. */
 export interface LilyFile {
 	lily_version: number;
 	/** Where the client stands in the engagement workflow. */
 	workflow_stage: WorkflowStage;
+	/** Who the current stage is waiting on. */
+	workflow_waiting_on: WorkflowWaitingOn;
 	/** Client-level variable values shared across all documents. */
 	variables: Record<string, string>;
 	/** Display names of conditional (ternary) variables that render as

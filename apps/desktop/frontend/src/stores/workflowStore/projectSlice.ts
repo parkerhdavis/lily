@@ -70,6 +70,20 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 		}
 	},
 
+	setWorkflowWaitingOn: async (waitingOn) => {
+		const { workingDir } = get();
+		if (!workingDir) return;
+		try {
+			await invoke("set_workflow_waiting_on", { workingDir, waitingOn });
+			await get().reloadLilyFile();
+		} catch (err) {
+			console.error("Failed to set workflow waiting state:", err);
+			useToastStore
+				.getState()
+				.addToast("error", `Failed to update the waiting state: ${err}`);
+		}
+	},
+
 	saveQuestionnaireNote: async (section, noteKind, value) => {
 		const { workingDir } = get();
 		if (!workingDir) return;

@@ -7,6 +7,7 @@ import type {
 	LilyFile,
 	RequiredDocument,
 	WorkflowStage,
+	WorkflowWaitingOn,
 } from "@/types";
 
 const ENGAGEMENT_LETTER =
@@ -99,6 +100,9 @@ export default function ClientWorkflow({
 	) => Promise<void>;
 }) {
 	const setWorkflowStage = useWorkflowStore((state) => state.setWorkflowStage);
+	const setWorkflowWaitingOn = useWorkflowStore(
+		(state) => state.setWorkflowWaitingOn,
+	);
 	const reloadLilyFile = useWorkflowStore((state) => state.reloadLilyFile);
 	const workingDir = useWorkflowStore((state) => state.workingDir);
 	const templates = useWorkflowStore((state) => state.templates);
@@ -280,7 +284,7 @@ export default function ClientWorkflow({
 							{next.description}
 						</p>
 					</div>
-					<div className="flex items-center gap-2">
+					<div className="flex flex-wrap items-center justify-end gap-2">
 						<button
 							type="button"
 							className="btn btn-ghost btn-xs"
@@ -288,6 +292,20 @@ export default function ClientWorkflow({
 						>
 							Select documents
 						</button>
+						<span className="text-xs text-base-content/40">Waiting on</span>
+						<select
+							className="select select-bordered select-sm"
+							value={lilyFile.workflow_waiting_on ?? "none"}
+							onChange={(event) =>
+								void setWorkflowWaitingOn(
+									event.target.value as WorkflowWaitingOn,
+								)
+							}
+						>
+							<option value="none">No one</option>
+							<option value="attorney">Attorney</option>
+							<option value="client">Client</option>
+						</select>
 						<span className="text-xs text-base-content/40">Stage</span>
 						<select
 							className="select select-bordered select-sm"

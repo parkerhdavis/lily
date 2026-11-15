@@ -10,6 +10,7 @@ import type {
 	VariableSchema,
 	WorkflowStage,
 	WorkflowStep,
+	WorkflowWaitingOn,
 } from "@/types";
 
 export interface WorkflowState {
@@ -78,6 +79,7 @@ export interface WorkflowState {
 	setWorkingDir: (dir: string) => void;
 	reloadLilyFile: () => Promise<void>;
 	setWorkflowStage: (stage: WorkflowStage) => Promise<void>;
+	setWorkflowWaitingOn: (waitingOn: WorkflowWaitingOn) => Promise<void>;
 	saveQuestionnaireNote: (
 		section: string,
 		noteKind: "client" | "internal",

@@ -27,7 +27,7 @@ use lily_file::{
     open_file_in_os, remove_client_variable, remove_required_document, resolve_contact_variables,
     save_client_variables, save_contact_bindings, save_questionnaire_note, save_variables,
     set_client_questionnaire, set_document_variables, set_role_override, set_variable_overrides,
-    set_workflow_stage, update_contact, update_required_document_notes,
+    set_workflow_stage, set_workflow_waiting_on, update_contact, update_required_document_notes,
     update_required_document_status,
 };
 use questionnaire::{
@@ -177,6 +177,7 @@ fn main() {
             backfill_required_documents,
             ensure_required_document,
             set_workflow_stage,
+            set_workflow_waiting_on,
             update_required_document_status,
             update_required_document_notes,
             remove_required_document,

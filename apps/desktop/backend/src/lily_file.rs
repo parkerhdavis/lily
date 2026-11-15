@@ -186,6 +186,16 @@ pub enum WorkflowStage {
     Complete,
 }
 
+/// Who the engagement is waiting on at the current stage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowWaitingOn {
+    #[default]
+    None,
+    Attorney,
+    Client,
+}
+
 /// Top-level `.lily` project file that lives in each client/working directory.
 /// Acts as both a configuration file and (via OS file-type association) a
 /// project launcher — analogous to Unreal Engine's `.uproject` files.
@@ -202,6 +212,9 @@ pub struct LilyFile {
     /// Where the client stands in the engagement workflow.
     #[serde(default)]
     pub workflow_stage: WorkflowStage,
+    /// Who the current stage is waiting on.
+    #[serde(default)]
+    pub workflow_waiting_on: WorkflowWaitingOn,
     /// Client-level variable values shared across all documents.
     pub variables: HashMap<String, String>,
     /// DEPRECATED: conditional variable names are now determined by the
@@ -283,6 +296,7 @@ impl Default for LilyFile {
             lily_type: Some("client".to_string()),
             lily_version: CURRENT_VERSION,
             workflow_stage: WorkflowStage::default(),
+            workflow_waiting_on: WorkflowWaitingOn::default(),
             variables: HashMap::new(),
             conditional_variables: Vec::new(),
             conditional_definitions: HashMap::new(),
@@ -1453,6 +1467,17 @@ pub fn check_document_consistency(working_dir: String) -> Result<ConsistencyRepo
 pub fn set_workflow_stage(working_dir: String, stage: WorkflowStage) -> Result<(), String> {
     let mut lily = read_lily_file(&working_dir)?;
     lily.workflow_stage = stage;
+    write_lily_file(&working_dir, &lily)
+}
+
+/// Set who the current engagement stage is waiting on.
+#[tauri::command]
+pub fn set_workflow_waiting_on(
+    working_dir: String,
+    waiting_on: WorkflowWaitingOn,
+) -> Result<(), String> {
+    let mut lily = read_lily_file(&working_dir)?;
+    lily.workflow_waiting_on = waiting_on;
     write_lily_file(&working_dir, &lily)
 }
 
