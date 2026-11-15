@@ -47,6 +47,7 @@ export interface WorkflowState {
 		templateRelPaths: string[],
 		templatesDir: string,
 	) => Promise<void>;
+	setRequiredDocuments: (templateRelPaths: string[]) => Promise<void>;
 	renameDocument: (newFilename: string) => Promise<void>;
 	saveDocument: () => Promise<void>;
 	restoreVersion: (snapshotPath: string) => Promise<void>;

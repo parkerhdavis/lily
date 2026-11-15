@@ -134,6 +134,38 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 		}
 	},
 
+	setRequiredDocuments: async (templateRelPaths) => {
+		const { workingDir, lilyFile } = get();
+		if (!workingDir) return;
+
+		const required = lilyFile?.required_documents ?? [];
+		const desired = new Set(templateRelPaths);
+		for (const document of required) {
+			if (
+				!desired.has(document.template_rel_path) &&
+				!document.document_filename
+			) {
+				await invoke("remove_required_document", {
+					workingDir,
+					documentId: document.id,
+				});
+			}
+		}
+		const existing = new Set(
+			required.map((document) => document.template_rel_path),
+		);
+		for (const templateRelPath of templateRelPaths) {
+			if (!existing.has(templateRelPath)) {
+				await invoke("add_required_document", {
+					workingDir,
+					templateRelPath,
+					notes: "",
+				});
+			}
+		}
+		await get().reloadLilyFile();
+	},
+
 	addMultipleDocuments: async (templateRelPaths, templatesDir) => {
 		const { workingDir, lilyFile } = get();
 		if (!workingDir) return;
