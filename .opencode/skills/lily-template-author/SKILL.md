@@ -81,9 +81,11 @@ A role node renders the client's ordered assignment list for one role:
 }
 ```
 
-A client binding stores `assignments`: each assignment is one contact or a shared group, and each later assignment is a successor tier. The renderer joins a group with the conjunction (default `and`), replaces `{names}` with the joined group and `{previous}` with the prior tier, and uses `intro` for a single first assignment, `shared_intro` for a shared first assignment, and `successor` for every later tier. `conjunction`, `separator`, and `oxford` override the join defaults. The role node's `when` condition follows the same language as any other node.
+A client binding stores `assignments`: each assignment is one contact or a shared group, and each later assignment is a successor tier. The renderer joins a group with the conjunction (default `and`), replaces `{names}` with the joined group and `{previous}` with the prior tier, and uses `intro` for a single first assignment, `shared_intro` for a shared first assignment, `successor` for a single successor tier, and `shared_successor` for a shared successor tier. `conjunction`, `separator`, and `oxford` override the join defaults. The role node's `when` condition follows the same language as any other node.
 
-A legacy single-contact or contact-list binding is one assignment. The old `Primary Trustee`, `Secondary Trustee`, and `Tertiary Trustee` bindings synthesize the `Successor Trustee` role, so a migrated plan still renders an existing client. A role with no assignment renders nothing and pushes a warning; the audit reports it as `missing_roles`.
+The templates also carry `{names_upper}` and `{previous_upper}` for the uppercase name style many execution clauses use, and `{previous_verb}` and `{previous_predecease}` for agreement with the prior tier: `is`/`are` and `predeceases`/`predecease`. This is what lets a shared prior group read as "if A and B predecease me or are unwilling" without a verb slot per tier.
+
+A legacy single-contact or contact-list binding is one assignment. The old trustee tiers synthesize the `Successor Trustee` role, and the personal-representative tiers with their co-representatives synthesize the `Personal Representative` role, so a migrated plan still renders an existing client. A role with no assignment renders nothing and pushes a warning; the audit reports it as `missing_roles`.
 
 ## What It Does Not Do
 

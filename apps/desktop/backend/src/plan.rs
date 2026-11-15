@@ -230,6 +230,8 @@ pub enum ContentNode {
 		#[serde(default)]
 		successor: Option<String>,
 		#[serde(default)]
+		shared_successor: Option<String>,
+		#[serde(default)]
 		conjunction: Option<String>,
 		#[serde(default)]
 		separator: Option<String>,
@@ -399,6 +401,51 @@ impl DataView {
 			}
 			if !assignments.is_empty() {
 				view.roles.insert("Successor Trustee".to_string(), assignments);
+			}
+		}
+		// The personal-representative tiers and their co-representatives are
+		// bound as separate roles. Fold each tier into one shared assignment
+		// for the ordered Personal Representative role.
+		if !view.roles.contains_key("Personal Representative") {
+			let mut assignments = Vec::new();
+			for (primary, co) in [
+				(
+					"Primary Personal Representative",
+					"Primary Co-Personal Representative",
+				),
+				(
+					"Secondary Personal Representative",
+					"Secondary Co-Personal Representative",
+				),
+				(
+					"Tertiary Personal Representative",
+					"Tertiary Co-Personal Representative",
+				),
+			] {
+				let Some(binding) = lily.contact_bindings.get(primary) else {
+					break;
+				};
+				let Some(mut assignment) = binding_assignment(binding, &lily.variables) else {
+					break;
+				};
+				if let Some(co_binding) = lily.contact_bindings.get(co) {
+					if let Some(co_assignment) =
+						binding_assignment(co_binding, &lily.variables)
+					{
+						assignment.contact_ids.extend(co_assignment.contact_ids);
+						for (key, value) in co_assignment.values {
+							assignment.values.entry(key).or_insert(value);
+						}
+					}
+				}
+				if assignment.contact_ids.is_empty() && assignment.values.is_empty() {
+					break;
+				}
+				assignments.push(assignment);
+			}
+			if !assignments.is_empty() {
+				view.roles
+					.insert("Personal Representative".to_string(), assignments);
 			}
 		}
 		view.lists.insert(
@@ -883,6 +930,7 @@ struct RoleWording<'a> {
 	intro: Option<&'a str>,
 	shared_intro: Option<&'a str>,
 	successor: Option<&'a str>,
+	shared_successor: Option<&'a str>,
 	conjunction: &'a str,
 	separator: &'a str,
 	oxford: bool,
@@ -899,6 +947,7 @@ fn render_role(
 		intro,
 		shared_intro,
 		successor,
+		shared_successor,
 		conjunction,
 		separator,
 		oxford,
@@ -910,22 +959,47 @@ fn render_role(
 	}
 	let mut output = String::new();
 	let mut previous: Option<String> = None;
+	let mut previous_names: Vec<String> = Vec::new();
 	for (index, names) in groups.iter().enumerate() {
 		let joined = join_names(names, conjunction, separator, oxford);
+		let upper_names: Vec<String> = names.iter().map(|name| name.to_uppercase()).collect();
+		let joined_upper = join_names(&upper_names, conjunction, separator, oxford);
+		let previous_upper = if previous_names.is_empty() {
+			String::new()
+		} else {
+			let upper: Vec<String> = previous_names
+				.iter()
+				.map(|name| name.to_uppercase())
+				.collect();
+			join_names(&upper, conjunction, separator, oxford)
+		};
 		let template = if index == 0 {
 			if names.len() > 1 {
 				shared_intro.or(intro)
 			} else {
 				intro
 			}
+		} else if names.len() > 1 {
+			shared_successor.or(successor)
 		} else {
 			successor
+		};
+		let previous_text = previous.as_deref().unwrap_or("");
+		let previous_verb = if previous_names.len() > 1 { "are" } else { "is" };
+		let previous_predecease = if previous_names.len() > 1 {
+			"predecease"
+		} else {
+			"predeceases"
 		};
 		match template {
 			Some(template) => {
 				let text = template
 					.replace("{names}", &joined)
-					.replace("{previous}", previous.as_deref().unwrap_or(""))
+					.replace("{names_upper}", &joined_upper)
+					.replace("{previous}", previous_text)
+					.replace("{previous_upper}", &previous_upper)
+					.replace("{previous_verb}", previous_verb)
+					.replace("{previous_predecease}", previous_predecease)
 					.replace("{role}", role);
 				output.push_str(&text);
 			}
@@ -937,6 +1011,7 @@ fn render_role(
 			}
 		}
 		previous = Some(joined);
+		previous_names = names.clone();
 	}
 	output
 }
@@ -993,6 +1068,7 @@ fn render_content(
 				intro,
 				shared_intro,
 				successor,
+				shared_successor,
 				conjunction,
 				separator,
 				oxford,
@@ -1012,6 +1088,7 @@ fn render_content(
 						intro: intro.as_deref(),
 						shared_intro: shared_intro.as_deref(),
 						successor: successor.as_deref(),
+						shared_successor: shared_successor.as_deref(),
 						conjunction: conjunction.as_deref().unwrap_or("and"),
 						separator: separator.as_deref().unwrap_or(", "),
 						oxford: oxford.unwrap_or(true),
@@ -1590,6 +1667,7 @@ fn resolve_segments(
 				intro,
 				shared_intro,
 				successor,
+				shared_successor,
 				conjunction,
 				separator,
 				oxford,
@@ -1609,6 +1687,7 @@ fn resolve_segments(
 						intro: intro.as_deref(),
 						shared_intro: shared_intro.as_deref(),
 						successor: successor.as_deref(),
+						shared_successor: shared_successor.as_deref(),
 						conjunction: conjunction.as_deref().unwrap_or("and"),
 						separator: separator.as_deref().unwrap_or(", "),
 						oxford: oxford.unwrap_or(true),
@@ -2994,6 +3073,7 @@ mod tests {
 				successor: Some(
 					"If {previous} shall die, resign, or cease to act, {names} shall serve as Trustee. ",
 				),
+				shared_successor: None,
 				conjunction: "and",
 				separator: ", ",
 				oxford: true,
@@ -3029,6 +3109,91 @@ mod tests {
 	}
 
 	#[test]
+	fn role_shared_successor_and_previous_grammar() {
+		let mut lily = LilyFile::default();
+		lily.contacts = vec![
+			role_contact("a", "Alice Adams"),
+			role_contact("b", "Bob Brown"),
+			role_contact("c", "Carol Clark"),
+		];
+		lily.contact_bindings.insert(
+			"Personal Representative".to_string(),
+			crate::lily_file::ContactBinding {
+				contact_id: None,
+				variable_mappings: HashMap::new(),
+				contact_ids: None,
+				assignments: Some(vec![
+					RoleAssignment {
+						contact_ids: vec!["a".to_string()],
+						values: HashMap::new(),
+					},
+					RoleAssignment {
+						contact_ids: vec!["b".to_string(), "c".to_string()],
+						values: HashMap::new(),
+					},
+				]),
+			},
+		);
+		let view = DataView::from_lily(&lily);
+		let mut warnings = Vec::new();
+		let text = render_role(
+			"Personal Representative",
+			RoleWording {
+				property: "full_name",
+				intro: Some("I appoint {names} as Personal Representative. "),
+				shared_intro: Some("I appoint {names} as Co-Personal Representatives. "),
+				successor: Some("If {previous} is unable to act, {names} shall serve. "),
+				shared_successor: Some(
+					"If {previous_upper} {previous_predecease} me or {previous_verb} unable to act, {names_upper} shall serve as Co-Personal Representatives. ",
+				),
+				conjunction: "and",
+				separator: ", ",
+				oxford: true,
+			},
+			&view,
+			&mut warnings,
+		);
+		assert_eq!(
+			text,
+			"I appoint Alice Adams as Personal Representative. If ALICE ADAMS predeceases me or is unable to act, BOB BROWN and CAROL CLARK shall serve as Co-Personal Representatives. "
+		);
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn personal_representative_tiers_fold_into_shared_assignments() {
+		let mut lily = LilyFile::default();
+		lily.contacts = vec![
+			role_contact("a", "Alice Adams"),
+			role_contact("b", "Bob Brown"),
+			role_contact("c", "Carol Clark"),
+		];
+		for (role, contact) in [
+			("Primary Personal Representative", "a"),
+			("Primary Co-Personal Representative", "b"),
+			("Secondary Personal Representative", "c"),
+		] {
+			lily.contact_bindings.insert(
+				role.to_string(),
+				crate::lily_file::ContactBinding {
+					contact_id: Some(contact.to_string()),
+					variable_mappings: HashMap::new(),
+					contact_ids: None,
+					assignments: None,
+				},
+			);
+		}
+		let view = DataView::from_lily(&lily);
+		assert_eq!(
+			view.role_names("Personal Representative", "full_name"),
+			vec![
+				vec!["Alice Adams".to_string(), "Bob Brown".to_string()],
+				vec!["Carol Clark".to_string()]
+			]
+		);
+	}
+
+	#[test]
 	fn missing_role_reports_a_warning() {
 		let view = DataView::default();
 		let mut warnings = Vec::new();
@@ -3039,6 +3204,7 @@ mod tests {
 				intro: Some("Settlors nominate {names}. "),
 				shared_intro: None,
 				successor: Some("If {previous} ceases to act, {names} shall serve. "),
+				shared_successor: None,
 				conjunction: "and",
 				separator: ", ",
 				oxford: true,
