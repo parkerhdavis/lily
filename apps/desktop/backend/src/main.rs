@@ -242,6 +242,9 @@ fn collect_template_files(
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
         if path.is_dir() {
+            if dir == base && entry.file_name() == "00 - Archive" {
+                continue;
+            }
             collect_template_files(base, &path, results)?;
         } else if let Some(ext) = path.extension() {
             if ext.eq_ignore_ascii_case("docx") || ext.eq_ignore_ascii_case("dotx") {
@@ -253,4 +256,29 @@ fn collect_template_files(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod template_listing_tests {
+    use super::collect_template_files;
+
+    #[test]
+    fn archive_folder_is_not_listed() {
+        let root = std::env::temp_dir().join(format!(
+            "lily-template-list-{}",
+            std::process::id()
+        ));
+        let live = root.join("01 - Live");
+        let archive = root.join("00 - Archive");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::write(live.join("Live.docx"), b"").unwrap();
+        std::fs::write(archive.join("Retired.dotx"), b"").unwrap();
+
+        let mut results = Vec::new();
+        collect_template_files(&root, &root, &mut results).unwrap();
+        assert_eq!(results, vec!["01 - Live/Live.docx".to_string()]);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

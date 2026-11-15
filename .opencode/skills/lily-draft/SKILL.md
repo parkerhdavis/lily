@@ -9,7 +9,7 @@ The plan is the content. The client `.lily` is the data. The skeleton is the lay
 
 ## Inputs
 
-- The plan path, usually `Templates/Plans/<Template>.plan.json` in the private template repository.
+- The plan path, usually `Templates/<purpose folder>/Plans/<Template>.plan.json` in the private template repository.
 - The client directory containing the `.lily` file.
 - The existing draft to compare against, when there is one.
 
