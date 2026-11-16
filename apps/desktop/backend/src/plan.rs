@@ -3652,6 +3652,7 @@ mod tests {
 			status: lily_file::DocumentStatus::default(),
 			document_filename: None,
 			notes: String::new(),
+			signed_artifacts: Vec::new(),
 		});
 		let view = DataView::from_lily(&lily);
 		assert!(eval_condition(

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useToastStore } from "@/stores/toastStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import type {
 	DocumentStatus,
 	LilyFile,
 	RequiredDocument,
+	SignedArtifact,
 	WorkflowStage,
 	WorkflowWaitingOn,
 } from "@/types";
@@ -155,6 +158,47 @@ export default function ClientWorkflow({
 		await setRequiredDocuments([...selectedTemplates]);
 		selectionDialogRef.current?.close();
 	}, [selectedTemplates, setRequiredDocuments]);
+	const attachSigned = useCallback(
+		async (document: RequiredDocument) => {
+			if (!workingDir) return;
+			const selected = await open({
+				multiple: false,
+				title: "Attach Signed PDF",
+				filters: [{ name: "PDF", extensions: ["pdf"] }],
+			});
+			if (!selected || Array.isArray(selected)) return;
+			try {
+				await invoke("attach_signed_document", {
+					workingDir,
+					documentId: document.id,
+					sourcePath: selected,
+				});
+				await reloadLilyFile();
+				useToastStore.getState().addToast("success", "Signed PDF attached");
+			} catch (err) {
+				useToastStore
+					.getState()
+					.addToast("error", `Failed to attach signed PDF: ${String(err)}`);
+			}
+		},
+		[workingDir, reloadLilyFile],
+	);
+
+	const openSigned = useCallback(
+		async (artifact: SignedArtifact) => {
+			if (!workingDir) return;
+			try {
+				await invoke("open_file_in_os", {
+					filePath: `${workingDir}/${artifact.filename}`,
+				});
+			} catch (err) {
+				useToastStore
+					.getState()
+					.addToast("error", `Failed to open signed PDF: ${String(err)}`);
+			}
+		},
+		[workingDir],
+	);
 	const engagement = required.find(
 		(document) => document.template_rel_path === ENGAGEMENT_LETTER,
 	);
@@ -197,17 +241,10 @@ export default function ClientWorkflow({
 		}
 		if (engagement.status !== "executed") {
 			return {
-				label: "Mark engagement letter signed",
+				label: "Attach signed engagement letter",
 				description:
-					"Record the signed engagement letter to move the client into drafting.",
-				action: () => {
-					if (!workingDir) return;
-					void invoke("update_required_document_status", {
-						workingDir,
-						documentId: engagement.id,
-						status: "executed",
-					}).then(() => reloadLilyFile());
-				},
+					"Attach the signed PDF to record the execution and move the client into drafting.",
+				action: () => void attachSigned(engagement),
 				disabled: !workingDir,
 			};
 		}
@@ -266,7 +303,7 @@ export default function ClientWorkflow({
 		engagement,
 		templatesDir,
 		workingDir,
-		reloadLilyFile,
+		attachSigned,
 		openSelection,
 		onStartAddDocument,
 		onOpenQuestionnaire,
@@ -359,53 +396,75 @@ export default function ClientWorkflow({
 
 				{required.length > 0 && (
 					<div className="mt-4 space-y-1 border-t border-base-300 pt-3">
-						{required.map((document) => (
-							<div
-								key={document.id}
-								className="flex items-center justify-between gap-2 rounded-lg bg-base-200/40 px-2 py-1.5 text-xs"
-							>
-								<span className="min-w-0 truncate">
-									{document.template_rel_path.replace(/^.*\//, "")}
-								</span>
-								<div className="flex shrink-0 items-center gap-1">
-									<span
-										className={`badge badge-sm ${statusBadge(document.status)}`}
-									>
-										{STATUS_LABELS[document.status]}
+						{required.map((document) => {
+							const latest = document.signed_artifacts?.at(-1);
+							return (
+								<div
+									key={document.id}
+									className="flex items-center justify-between gap-2 rounded-lg bg-base-200/40 px-2 py-1.5 text-xs"
+								>
+									<span className="min-w-0 truncate">
+										{document.template_rel_path.replace(/^.*\//, "")}
 									</span>
-									{document.document_filename ? (
-										<button
-											type="button"
-											className="btn btn-ghost btn-xs"
-											onClick={() =>
-												onOpenDocument(
-													document.document_filename!,
-													document.template_rel_path,
-												)
-											}
+									<div className="flex shrink-0 items-center gap-1">
+										<span
+											className={`badge badge-sm ${statusBadge(document.status)}`}
 										>
-											Open
-										</button>
-									) : (
-										<button
-											type="button"
-											className="btn btn-ghost btn-xs"
-											onClick={() => {
-												if (templatesDir) {
-													void onAddMultipleDocuments(
-														[document.template_rel_path],
-														templatesDir,
-													);
+											{STATUS_LABELS[document.status]}
+										</span>
+										{latest ? (
+											<button
+												type="button"
+												className="btn btn-ghost btn-xs"
+												title={`Signed copy attached ${new Date(latest.attached_at).toLocaleString()}`}
+												onClick={() => void openSigned(latest)}
+											>
+												Signed PDF
+											</button>
+										) : document.status === "executed" ? (
+											<button
+												type="button"
+												className="btn btn-ghost btn-xs"
+												onClick={() => void attachSigned(document)}
+												disabled={!workingDir}
+											>
+												Attach PDF
+											</button>
+										) : null}
+										{document.document_filename ? (
+											<button
+												type="button"
+												className="btn btn-ghost btn-xs"
+												onClick={() =>
+													onOpenDocument(
+														document.document_filename!,
+														document.template_rel_path,
+													)
 												}
-											}}
-											disabled={!templatesDir}
-										>
-											Draft
-										</button>
-									)}
+											>
+												Open
+											</button>
+										) : (
+											<button
+												type="button"
+												className="btn btn-ghost btn-xs"
+												onClick={() => {
+													if (templatesDir) {
+														void onAddMultipleDocuments(
+															[document.template_rel_path],
+															templatesDir,
+														);
+													}
+												}}
+												disabled={!templatesDir}
+											>
+												Draft
+											</button>
+										)}
+									</div>
 								</div>
-							</div>
-						))}
+							);
+						})}
 					</div>
 				)}
 			</div>

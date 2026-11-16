@@ -16,7 +16,8 @@ use docx_ops::{
     rename_document,
 };
 use lily_file::{
-    add_client_variable, add_contact, add_required_document, backfill_required_documents,
+    add_client_variable, add_contact, add_required_document, attach_signed_document,
+    backfill_required_documents,
     copy_from_spouse_lily,
     delete_contact, delete_document, check_document_consistency, detect_document_statuses,
     ensure_required_document, export_client_data, export_client_archive, import_client_data,
@@ -170,6 +171,7 @@ fn main() {
             delete_questionnaire,
             migrate_questionnaires,
             add_required_document,
+            attach_signed_document,
             backfill_required_documents,
             ensure_required_document,
             set_workflow_stage,

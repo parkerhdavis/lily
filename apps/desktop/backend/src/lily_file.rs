@@ -153,6 +153,22 @@ pub struct RequiredDocument {
     /// Free-form notes about this requirement.
     #[serde(default)]
     pub notes: String,
+    /// Signed copies attached to this requirement, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signed_artifacts: Vec<SignedArtifact>,
+}
+
+/// A signed PDF stored in the client folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignedArtifact {
+    /// Filename in the client directory.
+    pub filename: String,
+    /// When the copy was attached.
+    pub attached_at: DateTime<Utc>,
+    /// SHA-256 of the PDF bytes.
+    pub sha256: String,
+    /// Size in bytes.
+    pub size: u64,
 }
 
 /// Notes attached to a questionnaire section (client-facing and internal).
@@ -596,6 +612,11 @@ pub fn rename_document_entry(
         Some(mut meta) => {
             meta.modified_at = Utc::now();
             lily.documents.insert(new_filename.to_string(), meta);
+            for requirement in &mut lily.required_documents {
+                if requirement.document_filename.as_deref() == Some(old_filename) {
+                    requirement.document_filename = Some(new_filename.to_string());
+                }
+            }
         }
         None => {
             return Err(format!(
@@ -1558,6 +1579,7 @@ pub fn ensure_required_document(
             status: status.clone(),
             document_filename: Some(document_filename.clone()),
             notes: String::new(),
+            signed_artifacts: Vec::new(),
         });
         lily.required_documents
             .last_mut()
@@ -1605,6 +1627,7 @@ pub fn backfill_required_documents(working_dir: String) -> Result<usize, String>
                 status: DocumentStatus::Drafting,
                 document_filename: Some(filename),
                 notes: String::new(),
+                signed_artifacts: Vec::new(),
             });
             changed += 1;
         }
@@ -1629,6 +1652,7 @@ pub fn add_required_document(
         status: DocumentStatus::NotStarted,
         document_filename: None,
         notes,
+        signed_artifacts: Vec::new(),
     };
     lily.required_documents.push(doc.clone());
     write_lily_file(&working_dir, &lily)?;
@@ -1650,6 +1674,57 @@ pub fn update_required_document_status(
         .ok_or_else(|| format!("Required document '{}' not found", document_id))?;
     doc.status = status;
     write_lily_file(&working_dir, &lily)
+}
+
+/// Attach a signed PDF to a required document, copy it into the client
+/// folder, and mark the requirement executed.
+#[tauri::command]
+pub fn attach_signed_document(
+    working_dir: String,
+    document_id: String,
+    source_path: String,
+) -> Result<SignedArtifact, String> {
+    let source = Path::new(&source_path);
+    if !source.is_file() {
+        return Err(format!("Signed copy not found: {}", source.display()));
+    }
+    let is_pdf = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false);
+    if !is_pdf {
+        return Err("Signed copies must be PDF files".to_string());
+    }
+    let bytes = fs::read(source)
+        .map_err(|error| format!("Failed to read {}: {}", source.display(), error))?;
+    let mut lily = read_lily_file(&working_dir)?;
+    let doc = lily
+        .required_documents
+        .iter_mut()
+        .find(|d| d.id == document_id)
+        .ok_or_else(|| format!("Required document '{}' not found", document_id))?;
+
+    let stem = Path::new(&doc.template_rel_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Signed document");
+    let candidate = format!("{} (signed).pdf", stem);
+    let mut taken = std::collections::HashSet::new();
+    let filename = dedupe_filename(Path::new(&working_dir), &candidate, &mut taken);
+    let destination = Path::new(&working_dir).join(&filename);
+    atomic_write_bytes(&destination, &bytes)?;
+
+    let artifact = SignedArtifact {
+        filename,
+        attached_at: Utc::now(),
+        sha256: crate::provenance::sha256_hex(&bytes),
+        size: bytes.len() as u64,
+    };
+    doc.signed_artifacts.push(artifact.clone());
+    doc.status = DocumentStatus::Executed;
+    write_lily_file(&working_dir, &lily)?;
+    Ok(artifact)
 }
 
 /// Update the notes of a required document.
@@ -2128,6 +2203,7 @@ fn build_swapped_lily(source: &LilyFile, spouse: &Contact, new_spouse_id: &str) 
             status: DocumentStatus::NotStarted,
             document_filename: req.document_filename.clone(),
             notes: req.notes.clone(),
+            signed_artifacts: req.signed_artifacts.clone(),
         });
     }
 
@@ -2532,6 +2608,7 @@ mod tests {
             status: DocumentStatus::Complete,
             document_filename: Some("Will.docx".into()),
             notes: "n".into(),
+            signed_artifacts: Vec::new(),
         });
 
         (lily, john)
@@ -2902,6 +2979,94 @@ mod tests {
         assert_eq!(loaded.required_documents.len(), 1);
         assert_eq!(loaded.required_documents[0].status, DocumentStatus::Reviewing);
         assert_eq!(loaded.workflow_stage, WorkflowStage::Signed);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn attaching_a_signed_pdf_records_the_artifact_and_marks_executed() {
+        let directory = std::env::temp_dir().join(format!(
+            "lily-signed-artifact-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let working = directory.to_string_lossy().to_string();
+        write_lily_file(&working, &LilyFile::default()).expect("lily file");
+        let requirement = add_required_document(
+            working.clone(),
+            "01 - Engagement and Cover Letters/Engagement Letter Template.docx".to_string(),
+            String::new(),
+        )
+        .expect("requirement");
+
+        let source = directory.join("scan.pdf");
+        std::fs::write(&source, b"%PDF-1.4 signed engagement").expect("pdf");
+        let first = attach_signed_document(
+            working.clone(),
+            requirement.id.clone(),
+            source.to_string_lossy().to_string(),
+        )
+        .expect("attach");
+        assert_eq!(first.filename, "Engagement Letter Template (signed).pdf");
+        assert_eq!(first.size, b"%PDF-1.4 signed engagement".len() as u64);
+        assert_eq!(first.sha256.len(), 64);
+        assert!(directory.join(&first.filename).is_file());
+
+        let loaded = read_lily_file(&working).expect("reload");
+        let document = &loaded.required_documents[0];
+        assert_eq!(document.status, DocumentStatus::Executed);
+        assert_eq!(document.signed_artifacts.len(), 1);
+
+        let second = attach_signed_document(
+            working.clone(),
+            requirement.id,
+            source.to_string_lossy().to_string(),
+        )
+        .expect("second attach");
+        assert_ne!(first.filename, second.filename);
+        let loaded = read_lily_file(&working).expect("reload");
+        assert_eq!(loaded.required_documents[0].signed_artifacts.len(), 2);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn renaming_a_document_updates_the_required_document_link() {
+        let directory = std::env::temp_dir().join(format!(
+            "lily-rename-link-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let working = directory.to_string_lossy().to_string();
+        let mut lily = LilyFile::default();
+        lily.documents.insert(
+            "Old.docx".to_string(),
+            DocumentMeta {
+                template_rel_path: "Estate/Will.docx".to_string(),
+                created_at: Utc::now(),
+                modified_at: Utc::now(),
+                variable_names: Vec::new(),
+                role_overrides: HashMap::new(),
+                variable_overrides: HashMap::new(),
+                provenance: None,
+            },
+        );
+        lily.required_documents.push(RequiredDocument {
+            id: "req".to_string(),
+            template_rel_path: "Estate/Will.docx".to_string(),
+            status: DocumentStatus::Drafting,
+            document_filename: Some("Old.docx".to_string()),
+            notes: String::new(),
+            signed_artifacts: Vec::new(),
+        });
+        write_lily_file(&working, &lily).expect("lily file");
+        std::fs::write(directory.join("Old.docx"), b"docx").expect("document");
+        std::fs::write(directory.join("New.docx"), b"docx").expect("document");
+
+        rename_document_entry(&working, "Old.docx", "New.docx").expect("rename");
+        let loaded = read_lily_file(&working).expect("reload");
+        assert_eq!(
+            loaded.required_documents[0].document_filename.as_deref(),
+            Some("New.docx")
+        );
         std::fs::remove_dir_all(&directory).ok();
     }
 }

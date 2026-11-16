@@ -469,6 +469,10 @@ function SectionCard({
 						}
 						placeholder="Section description (optional)"
 					/>
+					<DocumentsField
+						documents={section.documents}
+						onChange={(documents) => onUpdate((s) => ({ ...s, documents }))}
+					/>
 
 					{/* Questions */}
 					{section.kind !== "contacts" && (
@@ -537,6 +541,33 @@ function SectionCard({
 
 // ─── Question Row ────────────────────────────────────────────────────────────
 
+function DocumentsField({
+	documents,
+	onChange,
+}: {
+	documents: string[] | undefined;
+	onChange: (documents: string[] | undefined) => void;
+}) {
+	return (
+		<div className="flex items-center gap-2">
+			<span className="text-xs text-base-content/50 shrink-0">Documents</span>
+			<input
+				type="text"
+				className="input input-bordered input-xs flex-1 font-mono"
+				value={(documents ?? []).join(", ")}
+				onChange={(event) => {
+					const paths = event.target.value
+						.split(",")
+						.map((path) => path.trim())
+						.filter(Boolean);
+					onChange(paths.length > 0 ? paths : undefined);
+				}}
+				placeholder="Every engagement"
+			/>
+		</div>
+	);
+}
+
 function QuestionRow({
 	question,
 	index,
@@ -575,6 +606,12 @@ function QuestionRow({
 				{question.kind === "contact-list" && (
 					<ContactListQuestionFields question={q} onUpdate={onUpdate} />
 				)}
+				<DocumentsField
+					documents={q.documents as string[] | undefined}
+					onChange={(documents) =>
+						onUpdate((current) => ({ ...current, documents }))
+					}
+				/>
 			</div>
 
 			{/* Move/remove */}

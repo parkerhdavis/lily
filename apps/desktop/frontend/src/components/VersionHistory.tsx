@@ -2,8 +2,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import DiffView from "@/components/DiffView";
+import { useToastStore } from "@/stores/toastStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
-import type { DocumentDiffLine, DocumentVersion } from "@/types";
+import type {
+	DocumentDiffLine,
+	DocumentVersion,
+	SignedArtifact,
+} from "@/types";
+import { extractFilename } from "@/utils/path";
 
 interface VersionHistoryProps {
 	documentPath: string | null;
@@ -18,6 +24,8 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 	const [diffVersion, setDiffVersion] = useState<DocumentVersion | null>(null);
 	const diffDialogRef = useRef<HTMLDialogElement>(null);
 	const restoreVersion = useWorkflowStore((state) => state.restoreVersion);
+	const lilyFile = useWorkflowStore((state) => state.lilyFile);
+	const workingDir = useWorkflowStore((state) => state.workingDir);
 
 	const load = useCallback(async () => {
 		if (!documentPath) return;
@@ -37,6 +45,25 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 	}, [load]);
 
 	if (!documentPath) return null;
+
+	const signedArtifacts =
+		lilyFile?.required_documents?.find(
+			(document) =>
+				document.document_filename === extractFilename(documentPath),
+		)?.signed_artifacts ?? [];
+
+	const openSigned = async (artifact: SignedArtifact) => {
+		if (!workingDir) return;
+		try {
+			await invoke("open_file_in_os", {
+				filePath: `${workingDir}/${artifact.filename}`,
+			});
+		} catch (err) {
+			useToastStore
+				.getState()
+				.addToast("error", `Failed to open signed PDF: ${String(err)}`);
+		}
+	};
 
 	const compare = async (version: DocumentVersion) => {
 		setBusy(true);
@@ -88,6 +115,35 @@ export default function VersionHistory({ documentPath }: VersionHistoryProps) {
 			{open && (
 				<div className="space-y-2 px-3 pb-3 text-xs">
 					{error && <p className="text-error">{error}</p>}
+					{signedArtifacts.length > 0 && (
+						<div className="rounded border border-base-300 bg-base-100 px-2 py-1.5">
+							<p className="font-semibold">Signed Copy</p>
+							{signedArtifacts.map((artifact) => (
+								<div
+									key={artifact.filename}
+									className="mt-1 flex items-center justify-between gap-2"
+								>
+									<div className="min-w-0">
+										<p className="truncate">{artifact.filename}</p>
+										<p className="text-base-content/50">
+											{new Date(artifact.attached_at).toLocaleString()} ·{" "}
+											{Math.max(1, Math.round(artifact.size / 1024))} KB ·{" "}
+											<span className="font-mono" title={artifact.sha256}>
+												{artifact.sha256.slice(0, 12)}
+											</span>
+										</p>
+									</div>
+									<button
+										type="button"
+										className="btn btn-ghost btn-xs shrink-0"
+										onClick={() => void openSigned(artifact)}
+									>
+										Open
+									</button>
+								</div>
+							))}
+						</div>
+					)}
 					{versions.length === 0 && (
 						<p className="text-base-content/50">No saved versions yet.</p>
 					)}

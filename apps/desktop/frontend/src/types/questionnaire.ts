@@ -13,6 +13,9 @@ export type QuestionDef =
 			half?: boolean;
 			/** If set, this field takes 1/3 width. */
 			third?: boolean;
+			/** Template paths this question applies to. Omitted or empty means
+			 *  every engagement the section serves. */
+			documents?: string[];
 	  }
 	| {
 			kind: "conditional";
@@ -23,6 +26,7 @@ export type QuestionDef =
 			trueLabel?: string;
 			/** Descriptive text for the "false" state. */
 			falseLabel?: string;
+			documents?: string[];
 	  }
 	| {
 			kind: "contact-role";
@@ -47,6 +51,7 @@ export type QuestionDef =
 			/** When true, only one shared assignment is allowed. Use this for
 			 *  roles that act together, such as deed beneficiaries. */
 			sharedOnly?: boolean;
+			documents?: string[];
 	  }
 	| {
 			kind: "contact-list";
@@ -61,6 +66,7 @@ export type QuestionDef =
 			/** Contact property aggregated from each selected contact.
 			 *  Defaults to "full_name". */
 			property?: string;
+			documents?: string[];
 	  }
 	| {
 			kind: "derived";
@@ -72,6 +78,7 @@ export type QuestionDef =
 			sources: string[];
 			/** String used to join non-empty source values. Defaults to " ". */
 			join?: string;
+			documents?: string[];
 	  };
 
 /** A section grouping related questions.

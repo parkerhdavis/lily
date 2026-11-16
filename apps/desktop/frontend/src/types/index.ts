@@ -12,6 +12,16 @@ export interface RequiredDocument {
 	status: DocumentStatus;
 	document_filename: string | null;
 	notes: string;
+	/** Signed copies attached to this requirement, newest last. */
+	signed_artifacts?: SignedArtifact[];
+}
+
+/** A signed PDF stored in the client folder. */
+export interface SignedArtifact {
+	filename: string;
+	attached_at: string;
+	sha256: string;
+	size: number;
 }
 
 export interface ClientSummary {

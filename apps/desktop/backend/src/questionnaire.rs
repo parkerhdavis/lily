@@ -36,6 +36,10 @@ pub struct SectionDef {
 	/// "standard" or "contacts". Defaults to "standard" if absent.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub kind: Option<String>,
+	/// Template paths this section applies to. Omitted or empty means every
+	/// engagement.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub documents: Option<Vec<String>>,
 	pub questions: Vec<QuestionDef>,
 }
 
@@ -492,4 +496,22 @@ pub fn migrate_questionnaires() -> Result<u32, String> {
 	}
 
 	Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn section_and_question_documents_survive_round_trip() {
+		let text = r#"{"lily_type":"questionnaire","id":"x","name":"n","version":1,"tabs":[],"sections":[{"title":"S","tab":"t","documents":["A.docx"],"questions":[{"kind":"text","variable":"V","label":"L","documents":["B.docx"]}]}]}"#;
+		let def: QuestionnaireDefFile = serde_json::from_str(text).expect("definition");
+		assert_eq!(
+			def.sections[0].documents.as_deref(),
+			Some(&["A.docx".to_string()][..])
+		);
+		let value = serde_json::to_value(&def).expect("json");
+		assert_eq!(value["sections"][0]["documents"][0], "A.docx");
+		assert_eq!(value["sections"][0]["questions"][0]["documents"][0], "B.docx");
+	}
 }
