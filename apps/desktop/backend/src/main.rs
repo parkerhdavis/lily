@@ -6,6 +6,7 @@ mod agent;
 mod docx_ops;
 mod history;
 mod lily_file;
+mod migrations;
 mod plan;
 mod provenance;
 mod questionnaire;

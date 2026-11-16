@@ -17,6 +17,9 @@ mod history;
 #[path = "../lily_file.rs"]
 mod lily_file;
 
+#[path = "../migrations.rs"]
+mod migrations;
+
 #[path = "../plan.rs"]
 mod plan;
 

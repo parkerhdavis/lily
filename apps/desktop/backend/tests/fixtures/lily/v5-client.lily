@@ -1,0 +1,25 @@
+{
+	"lily_version": 5,
+	"variables": {
+		"Client Full Name": "JANE DOE",
+		"Client County": "Denver"
+	},
+	"documents": {
+		"Will - JANE DOE.docx": {
+			"template_rel_path": "03 - Will Templates/Last Will and Testament Template.docx",
+			"created_at": "2025-01-01T00:00:00Z",
+			"modified_at": "2025-01-02T00:00:00Z"
+		}
+	},
+	"contacts": [],
+	"contact_bindings": {},
+	"required_documents": [
+		{
+			"id": "existing",
+			"template_rel_path": "03 - Will Templates/Last Will and Testament Template.docx",
+			"status": "drafting",
+			"document_filename": "Will - JANE DOE.docx",
+			"notes": ""
+		}
+	]
+}

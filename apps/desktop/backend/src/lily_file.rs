@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 const LILY_EXT: &str = "lily";
 const OLD_SIDECAR_FILENAME: &str = ".lily.json";
-const CURRENT_VERSION: u32 = 5;
+use crate::migrations::{self, CURRENT_VERSION};
 
 /// Write content to a file atomically: write to a temp file in the same
 /// directory, then rename over the target. Prevents corruption if the
@@ -428,14 +428,27 @@ pub fn read_lily_file(working_dir: &str) -> Result<LilyFile, String> {
         }
         let content =
             fs::read_to_string(path).map_err(|e| format!("Failed to read .lily file: {}", e))?;
-        let mut lily: LilyFile = serde_json::from_str(&content)
+        let mut value: serde_json::Value = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse .lily file: {}", e))?;
+        let report = migrations::migrate(&mut value)?;
+        let mut lily: LilyFile = serde_json::from_value(value)
+            .map_err(|e| format!("Failed to parse .lily file after migration: {}", e))?;
 
-        // Auto-migrate older versions: new fields have #[serde(default)] so
-        // they deserialize as empty; just bump the version and persist.
-        if lily.lily_version < CURRENT_VERSION {
-            lily.lily_version = CURRENT_VERSION;
+        if report.from < report.to {
+            // Keep the pre-migration file beside the client file. If the
+            // backup cannot be written, do not overwrite the original.
+            let backup = backup_client_lily(working_dir)?;
             write_lily_file(working_dir, &lily)?;
+            match backup {
+                Some(path) => warnings.push(format!(
+                    "Migrated client schema {} to {}; backup at {}",
+                    report.from, report.to, path
+                )),
+                None => warnings.push(format!(
+                    "Migrated client schema {} to {}",
+                    report.from, report.to
+                )),
+            }
         }
 
         lily.warnings = warnings;
@@ -509,7 +522,10 @@ fn migrate_legacy_sidecar(working_dir: &str) -> Result<LilyFile, String> {
     let legacy: LegacySidecarFile = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse legacy sidecar: {}", e))?;
 
-    let mut lily = LilyFile::default();
+    let mut lily = LilyFile {
+        lily_version: 4,
+        ..LilyFile::default()
+    };
 
     for (filename, meta) in legacy.documents {
         // Merge variable values into the top-level pool
@@ -538,14 +554,25 @@ fn migrate_legacy_sidecar(working_dir: &str) -> Result<LilyFile, String> {
         );
     }
 
-    // Write the new .lily file
-    write_lily_file(working_dir, &lily)?;
+    // Run the same v4 -> v5 backfill the normal chain uses, so the legacy
+    // documents get their required-document entries too.
+    let mut value = serde_json::to_value(&lily)
+        .map_err(|e| format!("Failed to serialize migrated client: {}", e))?;
+    migrations::migrate(&mut value)?;
+    let lily: LilyFile = serde_json::from_value(value)
+        .map_err(|e| format!("Failed to rebuild migrated client: {}", e))?;
 
-    // Remove the old .lily.json
-    if let Err(e) = fs::remove_file(&legacy_path) {
+    // Write the new .lily file, then keep the old sidecar as a backup.
+    write_lily_file(working_dir, &lily)?;
+    let stamp = Utc::now().format("%Y%m%d-%H%M%S%.3f");
+    let backup = legacy_path.with_file_name(format!(
+        "{}.bak-{}",
+        OLD_SIDECAR_FILENAME, stamp
+    ));
+    if let Err(error) = fs::rename(&legacy_path, &backup) {
         eprintln!(
-            "Warning: migrated to .lily but failed to remove old .lily.json: {}",
-            e
+            "Warning: migrated to .lily but failed to move old .lily.json aside: {}",
+            error
         );
     }
 
@@ -2979,6 +3006,99 @@ mod tests {
         assert_eq!(loaded.required_documents.len(), 1);
         assert_eq!(loaded.required_documents[0].status, DocumentStatus::Reviewing);
         assert_eq!(loaded.workflow_stage, WorkflowStage::Signed);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    fn fixture(name: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/lily")
+            .join(name);
+        std::fs::read_to_string(path).expect("fixture")
+    }
+
+    #[test]
+    fn migrating_a_client_writes_a_backup_and_backfills_required_documents() {
+        let directory = std::env::temp_dir().join(format!(
+            "lily-schema-migrate-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let path = directory.join("Client.lily");
+        std::fs::write(&path, fixture("v4-client.lily")).expect("client file");
+
+        let lily = read_lily_file(&directory.to_string_lossy()).expect("migrated");
+        assert_eq!(lily.lily_version, CURRENT_VERSION);
+        assert_eq!(lily.required_documents.len(), 1);
+        assert_eq!(
+            lily.required_documents[0].document_filename.as_deref(),
+            Some("Will - JANE DOE.docx")
+        );
+        assert!(lily
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Migrated client schema 4 to 5")));
+        let backups = std::fs::read_dir(&directory)
+            .expect("directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".bak-"))
+            .count();
+        assert_eq!(backups, 1);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_newer_client_schema_is_refused_without_writing() {
+        let directory = std::env::temp_dir().join(format!(
+            "lily-schema-newer-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).expect("directory");
+        let path = directory.join("Client.lily");
+        let original = r#"{"lily_version":99,"variables":{},"documents":{}}"#;
+        std::fs::write(&path, original).expect("client file");
+
+        let error = read_lily_file(&directory.to_string_lossy()).expect_err("newer schema");
+        assert!(error.contains("update Lily"));
+        assert_eq!(std::fs::read_to_string(&path).expect("unchanged"), original);
+        let backups = std::fs::read_dir(&directory)
+            .expect("directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".bak-"))
+            .count();
+        assert_eq!(backups, 0);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_legacy_sidecar_migrates_and_keeps_the_old_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "lily-legacy-sidecar-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).expect("directory");
+        std::fs::write(directory.join(".lily.json"), fixture("legacy-sidecar.json"))
+            .expect("sidecar");
+
+        let lily = read_lily_file(&directory.to_string_lossy()).expect("migrated");
+        assert_eq!(lily.lily_version, CURRENT_VERSION);
+        assert_eq!(lily.required_documents.len(), 1);
+        assert_eq!(
+            lily.variables.get("Client Full Name").map(String::as_str),
+            Some("JANE DOE")
+        );
+        let client_files: Vec<_> = std::fs::read_dir(&directory)
+            .expect("directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "lily"))
+            .collect();
+        assert_eq!(client_files.len(), 1);
+        let backups = std::fs::read_dir(&directory)
+            .expect("directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".lily.json.bak-"))
+            .count();
+        assert_eq!(backups, 1);
+        assert!(!directory.join(".lily.json").exists());
         std::fs::remove_dir_all(&directory).ok();
     }
 
