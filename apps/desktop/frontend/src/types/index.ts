@@ -33,6 +33,12 @@ export interface ClientSummary {
 	has_questionnaire: boolean;
 }
 
+/** A non-template file the library keeps for reference. */
+export interface ReferenceDocument {
+	name: string;
+	rel_path: string;
+}
+
 export interface RequiredDocumentSummary {
 	template_rel_path: string;
 	status: DocumentStatus;

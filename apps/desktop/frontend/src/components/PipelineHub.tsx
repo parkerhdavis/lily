@@ -9,7 +9,11 @@ import { useQuestionnaireStore } from "@/stores/questionnaireStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import { loadTemplateVariables } from "@/stores/workflowStore/helpers";
-import type { TemplateTreeNode, VariableInfo } from "@/types";
+import type {
+	ReferenceDocument,
+	TemplateTreeNode,
+	VariableInfo,
+} from "@/types";
 import type { QuestionnaireIndex } from "@/types/questionnaire";
 import { extractFilename } from "@/utils/path";
 
@@ -78,6 +82,7 @@ export default function PipelineHub() {
 
 	const [activeTab, setActiveTab] = useState<PipelineTab>("templates");
 	const [templates, setTemplates] = useState<string[]>([]);
+	const [referenceDocs, setReferenceDocs] = useState<ReferenceDocument[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 	const [templateVars, setTemplateVars] = useState<VariableInfo[]>([]);
@@ -98,6 +103,13 @@ export default function PipelineHub() {
 				.then(setTemplates)
 				.catch((err) => console.error("Failed to load templates:", err))
 				.finally(() => setLoading(false));
+			invoke<ReferenceDocument[]>("list_reference_documents", {
+				templatesDir: settings.templates_dir,
+			})
+				.then(setReferenceDocs)
+				.catch((err) =>
+					console.error("Failed to load reference documents:", err),
+				);
 		}
 	}, [settings.templates_dir]);
 
@@ -129,6 +141,20 @@ export default function PipelineHub() {
 			console.error("Failed to open template:", err);
 		}
 	}, [selectedTemplate, settings.templates_dir]);
+
+	const openReference = useCallback(
+		async (relPath: string) => {
+			if (!settings.templates_dir) return;
+			try {
+				await invoke("open_file_in_os", {
+					filePath: `${settings.templates_dir}/${relPath}`,
+				});
+			} catch (err) {
+				console.error("Failed to open reference document:", err);
+			}
+		},
+		[settings.templates_dir],
+	);
 
 	const pickTemplatesDir = async () => {
 		const selected = await open({
@@ -179,6 +205,7 @@ export default function PipelineHub() {
 				{activeTab === "templates" && (
 					<TemplatesTab
 						tree={tree}
+						referenceDocs={referenceDocs}
 						loading={loading}
 						templatesDir={settings.templates_dir}
 						selectedTemplate={selectedTemplate}
@@ -188,6 +215,7 @@ export default function PipelineHub() {
 						loadingVars={loadingVars}
 						onSelectTemplate={setSelectedTemplate}
 						onOpenInEditor={openInEditor}
+						onOpenReference={openReference}
 						onPickTemplatesDir={pickTemplatesDir}
 						questionnaireIndex={questionnaireIndex}
 						questionnairesDir={settings.questionnaires_dir}
@@ -224,6 +252,7 @@ export default function PipelineHub() {
 
 function TemplatesTab({
 	tree,
+	referenceDocs,
 	loading,
 	templatesDir,
 	selectedTemplate,
@@ -233,6 +262,7 @@ function TemplatesTab({
 	loadingVars,
 	onSelectTemplate,
 	onOpenInEditor,
+	onOpenReference,
 	onPickTemplatesDir,
 	questionnaireIndex,
 	questionnairesDir,
@@ -241,6 +271,7 @@ function TemplatesTab({
 	onGoToSettings,
 }: {
 	tree: TemplateTreeNode[];
+	referenceDocs: ReferenceDocument[];
 	loading: boolean;
 	templatesDir: string | null;
 	questionnairesDir: string | null;
@@ -251,6 +282,7 @@ function TemplatesTab({
 	loadingVars: boolean;
 	onSelectTemplate: (relPath: string | null) => void;
 	onOpenInEditor: () => void;
+	onOpenReference: (relPath: string) => void;
 	onPickTemplatesDir: () => void;
 	questionnaireIndex: QuestionnaireIndex | null;
 	onOpenQuestionnaire: (id: string) => void;
@@ -373,6 +405,43 @@ function TemplatesTab({
 							/>
 						))}
 					</div>
+				)}
+
+				{referenceDocs.length > 0 && (
+					<>
+						<div className="border-b border-base-300 my-4" />
+						<SectionHeading className="mb-3">
+							Reference Documents
+						</SectionHeading>
+						<div className="flex flex-col gap-0.5">
+							{referenceDocs.map((document) => (
+								<button
+									key={document.rel_path}
+									type="button"
+									className="btn btn-ghost btn-sm justify-start text-left w-full h-auto py-2 px-3 font-normal gap-2"
+									title={document.rel_path}
+									onClick={() => onOpenReference(document.rel_path)}
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										className="h-4 w-4 shrink-0 opacity-50"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<title>PDF</title>
+										<path
+											strokeLinecap="round"
+											strokeLinejoin="round"
+											strokeWidth={2}
+											d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+										/>
+									</svg>
+									<span className="truncate flex-1">{document.name}</span>
+								</button>
+							))}
+						</div>
+					</>
 				)}
 			</div>
 

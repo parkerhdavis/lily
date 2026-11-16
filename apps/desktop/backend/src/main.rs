@@ -132,6 +132,7 @@ fn main() {
             load_settings,
             save_settings,
             list_templates,
+            list_reference_documents,
             render_plan_document,
             render_plan_candidate,
             approve_plan_candidate,
@@ -250,9 +251,65 @@ fn collect_template_files(
     Ok(())
 }
 
+/// A non-template file the library keeps for reference, such as a state PDF
+/// form the app opens but does not fill.
+#[derive(Debug, serde::Serialize)]
+pub struct ReferenceDocument {
+    /// Display name (file stem with extension).
+    pub name: String,
+    /// Path relative to the templates directory.
+    pub rel_path: String,
+}
+
+#[tauri::command]
+fn list_reference_documents(templates_dir: String) -> Result<Vec<ReferenceDocument>, String> {
+    let path = std::path::Path::new(&templates_dir);
+    if !path.exists() {
+        return Err(format!(
+            "Templates directory does not exist: {}",
+            templates_dir
+        ));
+    }
+    let mut results = Vec::new();
+    collect_reference_files(path, path, &mut results)?;
+    results.sort_by(|left, right| left.rel_path.cmp(&right.rel_path));
+    Ok(results)
+}
+
+fn collect_reference_files(
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    results: &mut Vec<ReferenceDocument>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let path = entry.path();
+        if path.is_dir() {
+            if dir == base && entry.file_name() == "00 - Archive" {
+                continue;
+            }
+            collect_reference_files(base, &path, results)?;
+        } else if let Some(ext) = path.extension() {
+            if ext.eq_ignore_ascii_case("pdf") {
+                if let Ok(relative) = path.strip_prefix(base) {
+                    results.push(ReferenceDocument {
+                        name: path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                        rel_path: relative.to_string_lossy().to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod template_listing_tests {
-    use super::collect_template_files;
+    use super::{collect_reference_files, collect_template_files};
 
     #[test]
     fn archive_folder_is_not_listed() {
@@ -270,6 +327,29 @@ mod template_listing_tests {
         let mut results = Vec::new();
         collect_template_files(&root, &root, &mut results).unwrap();
         assert_eq!(results, vec!["01 - Live/Live.docx".to_string()]);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reference_listing_keeps_pdfs_and_skips_the_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "lily-reference-list-{}",
+            std::process::id()
+        ));
+        let live = root.join("05 - Deed Templates");
+        let archive = root.join("00 - Archive");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&archive).unwrap();
+        std::fs::write(live.join("Deed of Trust.pdf"), b"").unwrap();
+        std::fs::write(live.join("Deed.docx"), b"").unwrap();
+        std::fs::write(archive.join("Retired.pdf"), b"").unwrap();
+
+        let mut results = Vec::new();
+        collect_reference_files(&root, &root, &mut results).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].rel_path, "05 - Deed Templates/Deed of Trust.pdf");
+        assert_eq!(results[0].name, "Deed of Trust.pdf");
 
         std::fs::remove_dir_all(&root).unwrap();
     }
