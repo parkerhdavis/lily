@@ -5,7 +5,6 @@ import type {
 	ContactBinding,
 	LilyFile,
 	RoleOverride,
-	TextOccurrence,
 	VariableInfo,
 	VariableSchema,
 	WorkflowStage,
@@ -86,42 +85,6 @@ export interface WorkflowState {
 		value: string,
 	) => Promise<void>;
 	restoreNavigationEntry: (entry: NavigationEntry) => Promise<void>;
-
-	// Template editor state
-	templateEditorPath: string | null;
-	templateEditorHtml: string;
-	templateEditorVars: VariableInfo[];
-	templateEditorRelPath: string | null;
-	templateEditorDirty: boolean;
-
-	// Template editor actions
-	openTemplateEditor: (relPath: string, templatesDir: string) => Promise<void>;
-	insertTemplateVariable: (
-		searchText: string,
-		variableName: string,
-		occurrenceIndex?: number,
-		replaceAll?: boolean,
-	) => Promise<void>;
-	removeTemplateVariable: (
-		variableName: string,
-		replacementText: string,
-		occurrenceIndex?: number,
-	) => Promise<void>;
-	findTextOccurrences: (searchText: string) => Promise<TextOccurrence[]>;
-	confirmTemplateEdits: () => Promise<void>;
-	discardTemplateEdits: () => Promise<void>;
-	moveTemplateSdt: (
-		sdtId: string,
-		targetParaIdx: number,
-		targetCharOffset: number,
-	) => Promise<void>;
-	insertSdtAtPosition: (
-		variableName: string,
-		paraIdx: number,
-		charOffset: number,
-	) => Promise<void>;
-	renameTemplateVariable: (oldName: string, newName: string) => Promise<void>;
-	returnFromTemplateEditor: () => void;
 }
 
 /** Zustand slice creator type for workflow store slices. */

@@ -248,6 +248,7 @@ pub fn run_draft_agent(
         &temp_client,
         Path::new(&skeleton_path),
         &candidate,
+        None,
     )
     .inspect_err(|_| {
         let _ = fs::remove_dir_all(&out_dir);

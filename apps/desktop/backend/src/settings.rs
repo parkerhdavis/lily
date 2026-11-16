@@ -44,9 +44,6 @@ pub struct AppSettings {
     /// Last workflow step the user was on (for "pick up where you left off").
     #[serde(default)]
     pub last_step: Option<String>,
-    /// Template relative path for the last template-editor session.
-    #[serde(default)]
-    pub last_template_rel_path: Option<String>,
     /// Whether editors auto-save changes. Defaults to true when absent.
     #[serde(default)]
     pub autosave: Option<bool>,

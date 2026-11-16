@@ -18,26 +18,13 @@ const CLIENT_STEPS = new Set([
 	"edit-variables",
 ]);
 
-function describeLastStep(
-	step: string,
-	dirName: string | null,
-	templateRelPath: string | null,
-): string {
+function describeLastStep(step: string, dirName: string | null): string {
 	if (step === "clients") return "Clients";
 	if (CLIENT_STEPS.has(step) && dirName) return dirName;
 	if (step === "pipeline") return "Pipeline";
 	if (step === "app-settings") return "Settings";
 	if (step === "questionnaire-editor")
 		return "Pipeline \u203A Questionnaire Editor";
-	if (step === "template-editor" && templateRelPath) {
-		const name = templateRelPath
-			.split("/")
-			.pop()
-			?.replace(/\.docx?$/i, "")
-			.replace(/\.dotx$/i, "");
-		return `Pipeline \u203A ${name ?? "Template"}`;
-	}
-	if (step === "template-editor") return "Pipeline \u203A Edit Template";
 	return "";
 }
 
@@ -67,7 +54,6 @@ export default function LilyHub() {
 		goToSettings,
 		goToPipeline,
 		goToClients,
-		openTemplateEditor,
 	} = useWorkflowStore();
 
 	// Load a lightweight preview summary for the resume card
@@ -105,7 +91,7 @@ export default function LilyHub() {
 	};
 
 	const resumeLastSession = async () => {
-		const { last_step, last_working_dir, last_template_rel_path } = settings;
+		const { last_step, last_working_dir } = settings;
 		if (!last_step) return;
 
 		if (last_step === "clients") {
@@ -116,16 +102,7 @@ export default function LilyHub() {
 			goToPipeline();
 		} else if (last_step === "app-settings") {
 			goToSettings();
-		} else if (
-			last_step === "template-editor" &&
-			last_template_rel_path &&
-			settings.templates_dir
-		) {
-			await openTemplateEditor(last_template_rel_path, settings.templates_dir);
-		} else if (
-			last_step === "questionnaire-editor" ||
-			last_step === "template-editor"
-		) {
+		} else if (last_step === "questionnaire-editor") {
 			goToPipeline();
 		}
 	};
@@ -139,16 +116,7 @@ export default function LilyHub() {
 			goToPipeline();
 		} else if (entry.step === "app-settings") {
 			goToSettings();
-		} else if (
-			entry.step === "template-editor" &&
-			entry.template_rel_path &&
-			settings.templates_dir
-		) {
-			await openTemplateEditor(entry.template_rel_path, settings.templates_dir);
-		} else if (
-			entry.step === "questionnaire-editor" ||
-			entry.step === "template-editor"
-		) {
+		} else if (entry.step === "questionnaire-editor") {
 			goToPipeline();
 		}
 	};
@@ -183,7 +151,6 @@ export default function LilyHub() {
 		? describeLastStep(
 				settings.last_step,
 				settings.last_working_dir ? dirName(settings.last_working_dir) : null,
-				settings.last_template_rel_path ?? null,
 			)
 		: "";
 

@@ -17,6 +17,7 @@ All operations use stdlib only (zipfile, re, json) — no external deps.
 
 import json
 import re
+import xml.etree.ElementTree as ET
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -1420,3 +1421,47 @@ def save_template_schema(template_path: str, schema: dict) -> Path:
 		f.write("\n")
 
 	return lib_path
+
+
+# ── Document text and snapshot helpers ──────────────────────────────────────
+
+def extract_document_text(docx_path: Path) -> tuple[list[str], dict]:
+	"""Return the normalized paragraph lines and document metadata."""
+	entries = read_docx_xml_parts(str(docx_path))
+	root = ET.fromstring(entries["word/document.xml"])
+	word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+	lines: list[str] = []
+	styles: set[str] = set()
+	paragraph_count = 0
+	for paragraph in root.iter(word + "p"):
+		text = "".join(node.text or "" for node in paragraph.iter(word + "t"))
+		text = re.sub(r"\s+", " ", text).strip()
+		style = paragraph.find(f"{word}pPr/{word}pStyle")
+		if style is not None:
+			value = style.get(f"{word}val")
+			if value:
+				styles.add(value)
+		if text:
+			paragraph_count += 1
+			lines.append(text)
+
+	table_count = sum(1 for _ in root.iter(word + "tbl"))
+	meta = {
+		"paragraphs": paragraph_count,
+		"tables": table_count,
+		"styles": sorted(styles),
+	}
+	return lines, meta
+
+
+def render_snapshot(name: str, template_rel: str, lines: list[str], meta: dict) -> str:
+	header = [
+		f"# Scenario: {name}",
+		f"# Template: {template_rel}",
+		f"# Paragraphs: {meta['paragraphs']}",
+		f"# Tables: {meta['tables']}",
+		f"# Styles: {', '.join(meta['styles'])}",
+		"# ---",
+	]
+	return "\n".join(header + lines) + "\n"

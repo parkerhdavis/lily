@@ -11,11 +11,8 @@ mod questionnaire;
 mod settings;
 
 use docx_ops::{
-    begin_template_editing, confirm_template_edits, copy_template, discard_template_edits,
-    extract_variables, get_document_html, get_template_text_occurrences,
-    insert_sdt_at_position, insert_template_variable, load_template_schema,
-    migrate_template_to_sdt, move_template_sdt, remove_template_variable, rename_document,
-    rename_template_variable, replace_variables_v2, save_template_schema,
+    copy_template, get_document_html, load_template_schema, load_template_variables,
+    rename_document,
 };
 use lily_file::{
     add_client_variable, add_contact, add_required_document, backfill_required_documents,
@@ -125,19 +122,14 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             show_main_window,
             copy_template,
-            extract_variables,
 
             rename_document,
             get_document_html,
-            get_template_text_occurrences,
-            insert_template_variable,
-            remove_template_variable,
             load_template_schema,
-            save_template_schema,
+            load_template_variables,
             load_settings,
             save_settings,
             list_templates,
-            replace_variables_v2,
             render_plan_document,
             render_plan_candidate,
             approve_plan_candidate,
@@ -149,7 +141,6 @@ fn main() {
             list_document_versions,
             restore_document_version,
             diff_document_versions,
-            migrate_template_to_sdt,
             load_lily_file_cmd,
             save_variables,
             save_client_variables,
@@ -195,12 +186,6 @@ fn main() {
             create_lily_file,
             apply_variable_migration,
             copy_from_spouse_lily,
-            begin_template_editing,
-            confirm_template_edits,
-            discard_template_edits,
-            move_template_sdt,
-            insert_sdt_at_position,
-            rename_template_variable,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2218,14 +2218,13 @@ fn resolve_spouse_contact<'a>(
 }
 
 /// Recreate a single document in the target directory from its source
-/// template, baking in the target's resolved variables. Returns
-/// `Ok(filename)` on success or `Err(message)` to record as a warning.
+/// template through the plan engine. Returns `Ok(())` on success or
+/// `Err(message)` to record as a warning.
 fn recreate_document_from_template(
     target_dir: &str,
     templates_dir: &str,
     filename: &str,
     template_rel_path: &str,
-    target_variables: &HashMap<String, String>,
 ) -> Result<(), String> {
     let template_full = Path::new(templates_dir).join(template_rel_path);
     if !template_full.exists() {
@@ -2235,6 +2234,25 @@ fn recreate_document_from_template(
         ));
     }
     let template_path_str = template_full.to_string_lossy().to_string();
+    let schema = crate::docx_ops::load_template_schema(
+        templates_dir.to_string(),
+        template_rel_path.to_string(),
+    )?;
+    if schema.engine.as_deref() != Some("plan") {
+        return Err(format!(
+            "template '{}' is not plan-driven",
+            template_rel_path
+        ));
+    }
+    let plan_path = schema
+        .plan_path
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("template '{}' has no plan path", template_rel_path))?;
+    let plan_full = Path::new(templates_dir).join(plan_path);
+    if !plan_full.is_file() {
+        return Err(format!("plan not found at '{}'", plan_path));
+    }
 
     let docx_path = crate::docx_ops::copy_template(
         template_path_str,
@@ -2243,13 +2261,8 @@ fn recreate_document_from_template(
         template_rel_path.to_string(),
     )?;
 
-    // Extract variable names so future opens know what fields apply, even
-    // after placeholders are replaced.
-    let variable_names: Vec<String> =
-        match crate::docx_ops::extract_variables(docx_path.clone()) {
-            Ok(vars) => vars.into_iter().map(|v| v.display_name).collect(),
-            Err(_) => Vec::new(),
-        };
+    let mut variable_names: Vec<String> = schema.variables.keys().cloned().collect();
+    variable_names.sort_by_key(|name| name.to_lowercase());
     {
         let mut tl = read_lily_file(target_dir)?;
         if let Some(meta) = tl.documents.get_mut(filename) {
@@ -2258,28 +2271,13 @@ fn recreate_document_from_template(
         write_lily_file(target_dir, &tl)?;
     }
 
-    // Build conditional schema and bake in variable values.
-    let schema = crate::docx_ops::load_template_schema(
-        templates_dir.to_string(),
-        template_rel_path.to_string(),
-    )
-    .unwrap_or_default();
-    let mut conditional_schema: HashMap<String, Vec<crate::docx_ops::ConditionalDef>> =
-        HashMap::new();
-    for (name, entry) in &schema.variables {
-        if !entry.conditions.is_empty() {
-            conditional_schema.insert(name.clone(), entry.conditions.clone());
-        } else if let Some(c) = &entry.condition {
-            conditional_schema.insert(name.clone(), vec![c.clone()]);
-        }
-    }
-
-    crate::docx_ops::replace_variables_v2(
-        docx_path,
-        target_variables.clone(),
-        conditional_schema,
+    crate::plan::render_plan(
+        &plan_full,
+        Path::new(target_dir),
+        &template_full,
+        Path::new(&docx_path),
+        Some(Path::new(filename)),
     )?;
-
     Ok(())
 }
 
@@ -2378,7 +2376,6 @@ pub fn copy_from_spouse_lily(
             &templates_dir,
             &final_name,
             &meta.template_rel_path,
-            &resolved.variables,
         ) {
             Ok(()) => {
                 if &final_name != filename {

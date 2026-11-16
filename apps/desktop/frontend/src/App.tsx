@@ -7,7 +7,6 @@ import LilyHub from "@/components/LilyHub";
 import PipelineHub from "@/components/PipelineHub";
 import Questionnaire from "@/components/Questionnaire";
 import QuestionnaireEditor from "@/components/QuestionnaireEditor";
-import TemplateEditor from "@/components/TemplateEditor";
 import TemplatePicker from "@/components/TemplatePicker";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import KeyboardShortcutsModal from "@/components/ui/KeyboardShortcutsModal";
@@ -53,17 +52,10 @@ export default function App() {
 
 	// Track the current step in settings so LilyHub can offer "pick up where you left off"
 	// Only save non-hub steps — landing on hub at startup should not clear the previous value.
-	const templateEditorRelPath = useWorkflowStore(
-		(s) => s.templateEditorRelPath,
-	);
 	useEffect(() => {
 		if (!loaded || step === "hub") return;
-		const update: Record<string, unknown> = { last_step: step };
-		if (step === "template-editor" && templateEditorRelPath) {
-			update.last_template_rel_path = templateEditorRelPath;
-		}
-		useSettingsStore.getState().save(update);
-	}, [step, loaded, templateEditorRelPath]);
+		useSettingsStore.getState().save({ last_step: step });
+	}, [step, loaded]);
 
 	// Global zoom keyboard shortcuts: Ctrl+= / Ctrl+- / Ctrl+0
 	useEffect(() => {
@@ -175,8 +167,6 @@ export default function App() {
 				return <PipelineHub />;
 			case "questionnaire-editor":
 				return <QuestionnaireEditor />;
-			case "template-editor":
-				return <TemplateEditor />;
 		}
 	})();
 

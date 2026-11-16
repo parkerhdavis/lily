@@ -89,7 +89,7 @@ fn main() -> ExitCode {
 		}
 	};
 
-	match plan::render_plan(&args.plan, &args.client_dir, &args.skeleton, &args.output) {
+	match plan::render_plan(&args.plan, &args.client_dir, &args.skeleton, &args.output, None) {
 		Ok(report) => {
 			if args.json {
 				println!(

@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { useToastStore } from "@/stores/toastStore";
 import { useUndoStore } from "@/stores/undoStore";
-import type { LilyFile, VariableInfo } from "@/types";
+import type { LilyFile } from "@/types";
 import { extractFilename } from "@/utils/path";
-import { mergeStoredVariables, pushNav } from "./helpers";
+import {
+	loadTemplateVariables,
+	mergeStoredVariables,
+	pushNav,
+} from "./helpers";
 import type { WorkflowSlice } from "./types";
 
 export const createProjectSlice: WorkflowSlice = (set, get) => ({
@@ -165,18 +170,6 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 	},
 
 	restoreNavigationEntry: async (entry) => {
-		// For template-editor, delegate to openTemplateEditor which handles
-		// backup creation, HTML loading, and variable extraction.
-		if (entry.step === "template-editor" && entry.templateRelPath) {
-			const templatesDir = (
-				await import("@/stores/settingsStore")
-			).useSettingsStore.getState().settings.templates_dir;
-			if (templatesDir) {
-				await get().openTemplateEditor(entry.templateRelPath, templatesDir);
-				return;
-			}
-		}
-
 		const current = get();
 		const needsLilyReload =
 			entry.workingDir !== current.workingDir && entry.workingDir;
@@ -206,9 +199,11 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 				const documentHtml = await invoke<string>("get_document_html", {
 					docxPath: entry.documentPath,
 				});
-				let variables = await invoke<VariableInfo[]>("extract_variables", {
-					docxPath: entry.documentPath,
-				});
+				const templatesDir = useSettingsStore.getState().settings.templates_dir;
+				let variables =
+					templatesDir && entry.templateRelPath
+						? await loadTemplateVariables(templatesDir, entry.templateRelPath)
+						: [];
 				const { lilyFile } = get();
 
 				// Merge with stored names to restore nested variables inside

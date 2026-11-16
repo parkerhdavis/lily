@@ -29,7 +29,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		zoom: null,
 		footer_size: null,
 		last_step: null,
-		last_template_rel_path: null,
 		autosave: null,
 		questionnaires_dir: null,
 		client_library_dirs: [],

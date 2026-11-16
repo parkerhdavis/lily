@@ -8,6 +8,7 @@ import { useLilyIcon } from "@/hooks/useLilyIcon";
 import { useQuestionnaireStore } from "@/stores/questionnaireStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
+import { loadTemplateVariables } from "@/stores/workflowStore/helpers";
 import type { TemplateTreeNode, VariableInfo } from "@/types";
 import type { QuestionnaireIndex } from "@/types/questionnaire";
 import { extractFilename } from "@/utils/path";
@@ -65,7 +66,6 @@ export default function PipelineHub() {
 	const { settings, save } = useSettingsStore();
 	const goToHub = useWorkflowStore((s) => s.goToHub);
 	const goToSettings = useWorkflowStore((s) => s.goToSettings);
-	const openTemplateEditor = useWorkflowStore((s) => s.openTemplateEditor);
 	const goToQuestionnaireEditor = useWorkflowStore(
 		(s) => s.goToQuestionnaireEditor,
 	);
@@ -109,11 +109,10 @@ export default function PipelineHub() {
 		}
 
 		setLoadingVars(true);
-		const fullPath = `${settings.templates_dir}/${selectedTemplate}`;
-		invoke<VariableInfo[]>("extract_variables", { docxPath: fullPath })
+		loadTemplateVariables(settings.templates_dir, selectedTemplate)
 			.then(setTemplateVars)
 			.catch((err) => {
-				console.error("Failed to extract variables:", err);
+				console.error("Failed to load template variables:", err);
 				setTemplateVars([]);
 			})
 			.finally(() => setLoadingVars(false));
@@ -189,11 +188,6 @@ export default function PipelineHub() {
 						loadingVars={loadingVars}
 						onSelectTemplate={setSelectedTemplate}
 						onOpenInEditor={openInEditor}
-						onEditTemplate={() => {
-							if (selectedTemplate && settings.templates_dir) {
-								openTemplateEditor(selectedTemplate, settings.templates_dir);
-							}
-						}}
 						onPickTemplatesDir={pickTemplatesDir}
 						questionnaireIndex={questionnaireIndex}
 						questionnairesDir={settings.questionnaires_dir}
@@ -239,7 +233,6 @@ function TemplatesTab({
 	loadingVars,
 	onSelectTemplate,
 	onOpenInEditor,
-	onEditTemplate,
 	onPickTemplatesDir,
 	questionnaireIndex,
 	questionnairesDir,
@@ -258,7 +251,6 @@ function TemplatesTab({
 	loadingVars: boolean;
 	onSelectTemplate: (relPath: string | null) => void;
 	onOpenInEditor: () => void;
-	onEditTemplate: () => void;
 	onPickTemplatesDir: () => void;
 	questionnaireIndex: QuestionnaireIndex | null;
 	onOpenQuestionnaire: (id: string) => void;
@@ -394,7 +386,6 @@ function TemplatesTab({
 						conditionalVars={conditionalVars}
 						loadingVars={loadingVars}
 						onOpenInEditor={onOpenInEditor}
-						onEditTemplate={onEditTemplate}
 					/>
 				) : (
 					<div className="flex items-center justify-center h-full text-base-content/40 text-sm">
@@ -415,7 +406,6 @@ function TemplateDetails({
 	conditionalVars,
 	loadingVars,
 	onOpenInEditor,
-	onEditTemplate,
 }: {
 	relPath: string;
 	variables: VariableInfo[];
@@ -423,7 +413,6 @@ function TemplateDetails({
 	conditionalVars: VariableInfo[];
 	loadingVars: boolean;
 	onOpenInEditor: () => void;
-	onEditTemplate: () => void;
 }) {
 	const filename = extractFilename(relPath);
 	const folder = relPath.includes("/")
@@ -438,13 +427,6 @@ function TemplateDetails({
 			)}
 
 			<div className="flex gap-2 mb-6">
-				<button
-					type="button"
-					className="btn btn-primary btn-sm"
-					onClick={onEditTemplate}
-				>
-					Edit Template
-				</button>
 				<button
 					type="button"
 					className="btn btn-outline btn-sm"

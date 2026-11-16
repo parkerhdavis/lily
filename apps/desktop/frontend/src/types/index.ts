@@ -56,7 +56,6 @@ export interface AppSettings {
 	zoom: number | null;
 	footer_size: string | null;
 	last_step: string | null;
-	last_template_rel_path: string | null;
 	autosave: boolean | null;
 	questionnaires_dir: string | null;
 	client_library_dirs: string[];
@@ -74,15 +73,7 @@ export type WorkflowStep =
 	| "edit-variables"
 	| "app-settings"
 	| "pipeline"
-	| "questionnaire-editor"
-	| "template-editor";
-
-/** A single occurrence of text found in a template document. */
-export interface TextOccurrence {
-	index: number;
-	context: string;
-	paragraph_number: number;
-}
+	| "questionnaire-editor";
 
 /** A per-document override for a contact role. */
 export interface RoleOverride {

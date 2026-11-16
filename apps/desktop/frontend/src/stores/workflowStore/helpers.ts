@@ -43,7 +43,6 @@ export async function resolveContactVariables(workingDir: string) {
 export function navLabel(
 	step: WorkflowStep,
 	workingDir: string | null,
-	templateEditorRelPath?: string | null,
 ): string {
 	const folderName = workingDir ? extractFolderName(workingDir) : "";
 	switch (step) {
@@ -63,14 +62,6 @@ export function navLabel(
 			return "Pipeline";
 		case "questionnaire-editor":
 			return "Pipeline \u203A Questionnaire Editor";
-		case "template-editor": {
-			const templateName = templateEditorRelPath
-				? extractFilename(templateEditorRelPath)
-						.replace(/\.docx?$/i, "")
-						.replace(/\.dotx$/i, "")
-				: "Template";
-			return `Pipeline \u203A ${templateName}`;
-		}
 		default:
 			return step;
 	}
@@ -78,17 +69,12 @@ export function navLabel(
 
 /** Push the current state to navigation history before navigating away. */
 export function pushNav(state: WorkflowState) {
-	// For template-editor, use templateEditorRelPath as the template context
-	const templateRelPath =
-		state.step === "template-editor"
-			? state.templateEditorRelPath
-			: state.templateRelPath;
 	const entry = {
 		step: state.step,
 		workingDir: state.workingDir,
 		documentPath: state.documentPath,
-		templateRelPath,
-		label: navLabel(state.step, state.workingDir, state.templateEditorRelPath),
+		templateRelPath: state.templateRelPath,
+		label: navLabel(state.step, state.workingDir),
 	};
 	useNavigationStore.getState().push(entry);
 	debouncedPersistNavEntry(entry);
@@ -162,13 +148,29 @@ export function buildDocumentFilename(
 	return clientName ? `${baseName} - ${clientName}.docx` : `${baseName}.docx`;
 }
 
+/** Load a plan template's slots as the document's variable list. */
+export async function loadTemplateVariables(
+	templatesDir: string,
+	templateRelPath: string,
+): Promise<VariableInfo[]> {
+	try {
+		return await invoke<VariableInfo[]>("load_template_variables", {
+			templatesDir,
+			templateRelPath,
+		});
+	} catch {
+		return [];
+	}
+}
+
 /**
  * Merge extracted variables with stored variable names from the .lily file.
  *
  * Handles two problems that arise when a conditional was saved as false and
  * its true-branch contained nested variables:
- *   1. The nested variables are missing from `extract_variables` output
- *      because their placeholders were replaced by a zero-width bookmark.
+ *   1. The nested variables are missing from `load_template_variables`
+ *      output because the plan schema omits a slot that an older
+ *      document still references.
  *   2. Even when re-added, they need correct contact-role dot-notation
  *      variants so the UI recognises them as contact-role fields.
  *

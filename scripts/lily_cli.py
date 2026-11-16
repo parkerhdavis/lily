@@ -5,9 +5,8 @@ Agent-facing command line over Lily's client, template, and document primitives.
 
 The tool layer is deliberately thin. It reads `.lily` client files and template
 libraries, inspects a `.docx` without the UI, extracts normalized document text,
-diffs two documents, and forwards to the headless `lily-fill` binary. The plan,
-clause, render, and validate commands will extend this CLI when the plan
-renderer lands.
+diffs two documents, and renders plans. The plan, clause, render, and audit
+commands carry the document engine.
 
 Usage:
 	scripts/lily client show <client-dir>
@@ -15,8 +14,6 @@ Usage:
 	scripts/lily template schema <templates-dir> <relative-path>
 	scripts/lily docx text <document.docx>
 	scripts/lily docx diff <left.docx> <right.docx>
-	scripts/lily fill --client-dir <dir> --docx <name> --templates-dir <dir> \
-		--template-rel-path <path> [--output <path>] [--json]
 	scripts/lily doctor [--strict]
 
 Every command prints JSON unless the command is explicitly a text diff. Errors
@@ -39,7 +36,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from run_corpus import extract_document_text, render_snapshot
+from docx_utils import extract_document_text, render_snapshot
 import lily_compile
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -388,13 +385,6 @@ def command_docx_diff(args) -> None:
 		print(diff, end="")
 	if diff:
 		raise SystemExit(1)
-
-
-def resolve_fill_binary() -> Path:
-	override = os.environ.get("LILY_FILL_BIN")
-	if override:
-		return Path(override).expanduser().resolve()
-	return REPO_ROOT / "target" / "debug" / "lily-fill"
 
 
 def resolve_render_binary() -> Path:
@@ -1163,34 +1153,15 @@ def command_plan_render(args) -> None:
 	raise SystemExit(result.returncode)
 
 
-def command_fill(forwarded: list[str]) -> None:
-	binary = resolve_fill_binary()
-	if not binary.is_file():
-		fail(
-			f"lily-fill not found: {binary}\n"
-			"Build it with: cargo build --bin lily-fill (from apps/desktop/backend)"
-		)
-	result = subprocess.run([str(binary), *forwarded])
-	raise SystemExit(result.returncode)
-
-
 def command_doctor(args) -> None:
-	fill_binary = resolve_fill_binary()
 	render_binary = resolve_render_binary()
-	corpus = Path(os.environ.get("LILY_CORPUS", "~/Carelaw/carelaw-lily/Tests")).expanduser()
 	templates = Path(
 		os.environ.get("LILY_TEMPLATES", "~/Carelaw/carelaw-lily/Templates")
 	).expanduser()
 
 	checks = {
 		"python": {"version": sys.version.split()[0], "ok": sys.version_info >= (3, 10)},
-		"lily_fill": {"path": str(fill_binary), "ok": fill_binary.is_file()},
 		"lily_render": {"path": str(render_binary), "ok": render_binary.is_file()},
-		"corpus": {
-			"path": str(corpus),
-			"manifest": str(corpus / "manifest.json"),
-			"ok": (corpus / "manifest.json").is_file(),
-		},
 		"templates": {
 			"path": str(templates),
 			"ok": (templates / "Estate Planning Templates.lily").is_file(),
@@ -1306,12 +1277,6 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	compile_command.set_defaults(func=command_compile)
 
-	fill = subparsers.add_parser(
-		"fill", help="Forward to the headless lily-fill binary", add_help=False
-	)
-	fill.add_argument("forwarded", nargs=argparse.REMAINDER)
-	fill.set_defaults(func=lambda arguments: command_fill(arguments.forwarded))
-
 	doctor = subparsers.add_parser("doctor", help="Check the tool layer's environment")
 	doctor.add_argument("--strict", action="store_true", help="Exit non-zero if a check fails")
 	doctor.set_defaults(func=command_doctor)
@@ -1320,11 +1285,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-	# `fill` forwards every argument verbatim; argparse would reject lily-fill's
-	# own options, so intercept it before building the parser.
-	if len(sys.argv) > 1 and sys.argv[1] == "fill":
-		command_fill(sys.argv[2:])
-		return
 	parser = build_parser()
 	args = parser.parse_args()
 	args.func(args)

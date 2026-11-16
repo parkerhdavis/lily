@@ -283,8 +283,6 @@ function getStepLabel(step: string, workingDir: string | null): string {
 			return "Pipeline";
 		case "questionnaire-editor":
 			return "Pipeline \u203A Questionnaire Editor";
-		case "template-editor":
-			return "Pipeline \u203A Edit Template";
 		default:
 			return "";
 	}

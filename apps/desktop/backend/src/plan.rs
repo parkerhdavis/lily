@@ -2837,7 +2837,7 @@ pub fn render_plan_document(
 		.map(PathBuf::from)
 		.or_else(|| resolve_plan_skeleton(plan_file))
 		.unwrap_or_else(|| path.to_path_buf());
-	render_plan(plan_file, client_dir, &skeleton, path)
+	render_plan(plan_file, client_dir, &skeleton, path, Some(path))
 }
 
 /// Resolve the pristine template a plan was compiled from. The app normally
@@ -2870,6 +2870,7 @@ pub fn render_plan(
 	client_dir: &Path,
 	skeleton_path: &Path,
 	output_path: &Path,
+	document_path: Option<&Path>,
 ) -> Result<RenderReport, String> {
 	let plan = read_plan_file(plan_path)?;
 
@@ -2877,15 +2878,21 @@ pub fn render_plan(
 	lily_file::resolve_contact_variables(client_dir.to_string_lossy().to_string())?;
 	let lily = lily_file::read_lily_file(&client_dir.to_string_lossy())?;
 	let mut view = DataView::from_lily(&lily);
-	if let Some(filename) = skeleton_path.file_name().and_then(|name| name.to_str()) {
-		if let Some(meta) = lily.documents.get(filename) {
-			for (name, value) in &meta.variable_overrides {
+	let document_name = document_path
+		.or(Some(output_path))
+		.and_then(|path| path.file_name())
+		.and_then(|name| name.to_str())
+		.map(|name| name.to_string());
+	if let Some(meta) = document_name
+		.as_deref()
+		.and_then(|name| lily.documents.get(name))
+	{
+		for (name, value) in &meta.variable_overrides {
+			view.variables.insert(name.clone(), value.clone());
+		}
+		for role_override in meta.role_overrides.values() {
+			for (name, value) in &role_override.values {
 				view.variables.insert(name.clone(), value.clone());
-			}
-			for role_override in meta.role_overrides.values() {
-				for (name, value) in &role_override.values {
-					view.variables.insert(name.clone(), value.clone());
-				}
 			}
 		}
 	}
@@ -3053,6 +3060,7 @@ pub fn render_plan_candidate(
 		client_dir,
 		Path::new(&skeleton_path),
 		&candidate,
+		Some(docx),
 	)
 	.inspect_err(|_| {
 		let _ = fs::remove_file(&candidate);
