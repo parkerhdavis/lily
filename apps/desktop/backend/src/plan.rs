@@ -555,7 +555,7 @@ impl DataView {
 		view.variables.insert(
 			"And Spouse Name".to_string(),
 			if has_spouse {
-				format!(" and {}", spouse_name)
+				format!(" and {}", spouse_name.to_uppercase())
 			} else {
 				String::new()
 			},
@@ -3900,7 +3900,7 @@ mod tests {
 		assert_eq!(view.get("Settlor Term"), Some("Settlors"));
 		assert_eq!(view.get("Settlor Possessive"), Some("Settlors\u{2019}"));
 		assert_eq!(view.get("Settlor Verb"), Some("are"));
-		assert_eq!(view.get("And Spouse Name"), Some(" and John B. Doe"));
+		assert_eq!(view.get("And Spouse Name"), Some(" and JOHN B. DOE"));
 
 		lily.variables
 			.insert("Has Spouse".to_string(), "false".to_string());
