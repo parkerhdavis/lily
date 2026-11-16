@@ -14,6 +14,12 @@ export interface RequiredDocument {
 	notes: string;
 	/** Signed copies attached to this requirement, newest last. */
 	signed_artifacts?: SignedArtifact[];
+	/** The filename the import proposes before the document is drafted. */
+	proposed_filename?: string | null;
+	/** Which client this document belongs to: "a", "b", or null for joint. */
+	client_key?: string | null;
+	/** False when the document is proposed but not yet draft-ready. */
+	draft_ready?: boolean;
 }
 
 /** A signed PDF stored in the client folder. */
@@ -184,6 +190,10 @@ export interface Contact {
 	state: string;
 	zip: string;
 	is_minor: boolean;
+	preferred_name?: string;
+	other_names?: string;
+	date_of_birth?: string;
+	roster_number?: number | null;
 }
 
 /** One person or a shared group in an ordered role assignment. */
@@ -250,8 +260,138 @@ export interface LilyFile {
 	questionnaire_version: number | null;
 	/** Documents required for this client, with status tracking. */
 	required_documents: RequiredDocument[];
+	/** The second client in a joint matter. */
+	co_client?: ClientProfile | null;
+	/** The questionnaire PDF that produced this client. */
+	questionnaire_pdf?: QuestionnairePdf | null;
+	/** Role assignments per client in a joint matter. */
+	client_roles?: Record<string, Record<string, ContactBinding>>;
+	/** Estate worksheet captured from the questionnaire. */
+	estate?: EstateWorksheet | null;
 	/** Non-persisted warnings from loading this file. */
 	warnings: string[];
+}
+
+export interface ClientProfile {
+	first_name: string;
+	middle_name: string;
+	last_name: string;
+	other_names: string;
+	preferred_name: string;
+	date_of_birth: string;
+	phone: string;
+	email: string;
+	address: string;
+	city: string;
+	state: string;
+	zip: string;
+	county: string;
+}
+
+export interface QuestionnairePdf {
+	filename: string;
+	sha256: string;
+	imported_at: string;
+	field_map_version: number;
+}
+
+export interface EstateWorksheet {
+	real_property?: Record<string, string>[];
+	accounts?: Record<string, string>[];
+	insurance?: Record<string, string>[];
+	businesses?: Record<string, string>[];
+	liabilities?: Record<string, string>[];
+	gifts?: Record<string, string>[];
+	notes?: string;
+}
+
+export interface QuestionnairePreviewClient {
+	key: string;
+	first_name: string;
+	middle_name: string;
+	last_name: string;
+	other_names: string;
+	preferred_name: string;
+	date_of_birth: string;
+	phone: string;
+	email: string;
+	address: string;
+	city: string;
+	state: string;
+	zip: string;
+	county: string;
+}
+
+export interface QuestionnairePreviewPerson {
+	number: number;
+	full_name: string;
+	first_name: string;
+	middle_name: string;
+	last_name: string;
+	relationship: string;
+	other_relationship: string;
+	date_of_birth: string;
+	phone: string;
+	email: string;
+	address: string;
+	is_minor: boolean;
+}
+
+export interface QuestionnaireAssignment {
+	number: number | null;
+	name: string;
+}
+
+export interface QuestionnaireRole {
+	key: string;
+	label: string;
+	assignments: QuestionnaireAssignment[];
+}
+
+export interface QuestionnairePreview {
+	field_map_version: number;
+	field_count: number;
+	source_path: string;
+	source_filename: string;
+	sha256: string;
+	suggested_folder_name: string;
+	clients: QuestionnairePreviewClient[];
+	people: QuestionnairePreviewPerson[];
+	roles: Record<string, QuestionnaireRole>;
+	household: {
+		trust_name: string;
+		trustees: QuestionnaireAssignment[];
+		guardians: QuestionnaireAssignment[];
+		children: {
+			number: number;
+			name: string;
+			age: string;
+			outright: boolean;
+			in_trust: boolean;
+		}[];
+		tangible_recipient: string;
+		distribution_summary: string;
+	};
+	estate: {
+		real_property?: Record<string, string>[];
+		accounts?: Record<string, string>[];
+		insurance?: Record<string, string>[];
+		businesses?: Record<string, string>[];
+		liabilities?: Record<string, string>[];
+		gifts?: Record<string, string>[];
+		notes?: string;
+	};
+	required_document_count: number;
+	warnings: string[];
+	unknown_fields: string[];
+	missing_fields: string[];
+}
+
+export interface CreatedQuestionnaireClient {
+	directory: string;
+	folder_name: string;
+	warnings: string[];
+	required_document_count: number;
 }
 
 /** Result of `copy_from_spouse_lily`: the new resolved .lily plus

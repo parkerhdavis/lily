@@ -2,7 +2,7 @@
 use chrono::{DateTime, Utc};
 use crate::provenance::DraftProvenance;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 use tracing::{info, warn};
@@ -61,6 +61,18 @@ pub struct Contact {
     pub zip: String,
     #[serde(default)]
     pub is_minor: bool,
+    /// The name the client prefers to be called by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preferred_name: String,
+    /// Other names the client has used.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub other_names: String,
+    /// Date of birth as written on the questionnaire.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub date_of_birth: String,
+    /// Roster number from the PDF questionnaire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roster_number: Option<u32>,
 }
 
 /// Maps a "role" (e.g., "Healthcare POA Agent") to a contact, plus a mapping
@@ -150,12 +162,86 @@ pub struct RequiredDocument {
     /// The filename of the actual document in the working dir, once created.
     /// Links to the `documents` HashMap key in `LilyFile`.
     pub document_filename: Option<String>,
+    /// The filename the import proposes for this document before it is drafted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed_filename: Option<String>,
     /// Free-form notes about this requirement.
     #[serde(default)]
     pub notes: String,
     /// Signed copies attached to this requirement, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signed_artifacts: Vec<SignedArtifact>,
+    /// Which client this document belongs to: "a", "b", or None for joint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<String>,
+    /// False when the document is proposed but the per-client drafting path
+    /// cannot produce it yet.
+    #[serde(default = "default_true")]
+    pub draft_ready: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The second client in a joint matter.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClientProfile {
+    #[serde(default)]
+    pub first_name: String,
+    #[serde(default)]
+    pub middle_name: String,
+    #[serde(default)]
+    pub last_name: String,
+    #[serde(default)]
+    pub other_names: String,
+    #[serde(default)]
+    pub preferred_name: String,
+    #[serde(default)]
+    pub date_of_birth: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub city: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub zip: String,
+    #[serde(default)]
+    pub county: String,
+}
+
+/// The questionnaire PDF that produced this client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionnairePdf {
+    pub filename: String,
+    pub sha256: String,
+    pub imported_at: DateTime<Utc>,
+    pub field_map_version: u32,
+}
+
+/// Estate worksheet rows captured from the questionnaire. The rows are kept
+/// as keyed maps because the templates do not yet consume them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EstateWorksheet {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub real_property: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub insurance: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub businesses: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub liabilities: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gifts: Vec<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
 }
 
 /// A signed PDF stored in the client folder.
@@ -263,6 +349,19 @@ pub struct LilyFile {
     /// Documents required for this client, with status tracking.
     #[serde(default)]
     pub required_documents: Vec<RequiredDocument>,
+    /// The second client in a joint matter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub co_client: Option<ClientProfile>,
+    /// The questionnaire PDF that produced this client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub questionnaire_pdf: Option<QuestionnairePdf>,
+    /// Role assignments per client, keyed "a" or "b", for documents that
+    /// belong to one client in a joint matter.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub client_roles: BTreeMap<String, BTreeMap<String, ContactBinding>>,
+    /// Estate worksheet captured from the questionnaire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estate: Option<EstateWorksheet>,
     /// Non-persisted warnings surfaced to the frontend on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
@@ -328,6 +427,10 @@ impl Default for LilyFile {
             questionnaire_id: None,
             questionnaire_version: None,
             required_documents: Vec::new(),
+            co_client: None,
+            questionnaire_pdf: None,
+            client_roles: BTreeMap::new(),
+            estate: None,
             warnings: Vec::new(),
         }
     }
@@ -1607,6 +1710,9 @@ pub fn ensure_required_document(
             document_filename: Some(document_filename.clone()),
             notes: String::new(),
             signed_artifacts: Vec::new(),
+            client_key: None,
+            draft_ready: true,
+            proposed_filename: None,
         });
         lily.required_documents
             .last_mut()
@@ -1655,6 +1761,9 @@ pub fn backfill_required_documents(working_dir: String) -> Result<usize, String>
                 document_filename: Some(filename),
                 notes: String::new(),
                 signed_artifacts: Vec::new(),
+                client_key: None,
+                draft_ready: true,
+                proposed_filename: None,
             });
             changed += 1;
         }
@@ -1680,6 +1789,9 @@ pub fn add_required_document(
         document_filename: None,
         notes,
         signed_artifacts: Vec::new(),
+        client_key: None,
+        draft_ready: true,
+        proposed_filename: None,
     };
     lily.required_documents.push(doc.clone());
     write_lily_file(&working_dir, &lily)?;
@@ -2174,6 +2286,10 @@ fn build_swapped_lily(source: &LilyFile, spouse: &Contact, new_spouse_id: &str) 
             .unwrap_or_default(),
         relationship: "Spouse".to_string(),
         other_relationship: String::new(),
+        preferred_name: String::new(),
+        other_names: String::new(),
+        date_of_birth: String::new(),
+        roster_number: None,
         phone: source
             .variables
             .get("Client Phone")
@@ -2231,6 +2347,9 @@ fn build_swapped_lily(source: &LilyFile, spouse: &Contact, new_spouse_id: &str) 
             document_filename: req.document_filename.clone(),
             notes: req.notes.clone(),
             signed_artifacts: req.signed_artifacts.clone(),
+            client_key: None,
+            draft_ready: true,
+            proposed_filename: None,
         });
     }
 
@@ -2567,6 +2686,10 @@ mod tests {
             state: "CO".to_string(),
             zip: "80202".to_string(),
             is_minor: false,
+            preferred_name: String::new(),
+            other_names: String::new(),
+            date_of_birth: String::new(),
+            roster_number: None,
         }
     }
 
@@ -2636,6 +2759,9 @@ mod tests {
             document_filename: Some("Will.docx".into()),
             notes: "n".into(),
             signed_artifacts: Vec::new(),
+            client_key: None,
+            draft_ready: true,
+            proposed_filename: None,
         });
 
         (lily, john)
@@ -3176,6 +3302,9 @@ mod tests {
             document_filename: Some("Old.docx".to_string()),
             notes: String::new(),
             signed_artifacts: Vec::new(),
+            client_key: None,
+            draft_ready: true,
+            proposed_filename: None,
         });
         write_lily_file(&working, &lily).expect("lily file");
         std::fs::write(directory.join("Old.docx"), b"docx").expect("document");

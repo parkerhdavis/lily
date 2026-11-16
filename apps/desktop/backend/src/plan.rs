@@ -3267,6 +3267,10 @@ mod tests {
 			state: String::new(),
 			zip: String::new(),
 			is_minor: false,
+			preferred_name: String::new(),
+			other_names: String::new(),
+			date_of_birth: String::new(),
+			roster_number: None,
 		}
 	}
 
@@ -3651,8 +3655,11 @@ mod tests {
 			template_rel_path: "04 - Trust Templates/Trust Agreement Template.docx".to_string(),
 			status: lily_file::DocumentStatus::default(),
 			document_filename: None,
+			proposed_filename: None,
 			notes: String::new(),
 			signed_artifacts: Vec::new(),
+			client_key: None,
+			draft_ready: true,
 		});
 		let view = DataView::from_lily(&lily);
 		assert!(eval_condition(

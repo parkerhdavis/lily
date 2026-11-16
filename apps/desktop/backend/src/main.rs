@@ -7,6 +7,7 @@ mod docx_ops;
 mod history;
 mod lily_file;
 mod migrations;
+mod pdf_questionnaire;
 mod plan;
 mod provenance;
 mod questionnaire;
@@ -16,6 +17,7 @@ use docx_ops::{
     copy_template, get_document_html, load_template_schema, load_template_variables,
     rename_document,
 };
+use pdf_questionnaire::{create_client_from_questionnaire, preview_pdf_questionnaire};
 use lily_file::{
     add_client_variable, add_contact, add_required_document, attach_signed_document,
     backfill_required_documents,
@@ -133,6 +135,8 @@ fn main() {
             load_settings,
             save_settings,
             list_templates,
+            preview_pdf_questionnaire,
+            create_client_from_questionnaire,
             list_reference_documents,
             render_plan_document,
             render_plan_candidate,

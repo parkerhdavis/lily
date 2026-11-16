@@ -250,7 +250,9 @@ export default function ClientWorkflow({
 		}
 		const nextDraft = required.find(
 			(document) =>
-				document.status === "not_started" && document.template_rel_path,
+				document.status === "not_started" &&
+				document.template_rel_path &&
+				document.draft_ready !== false,
 		);
 		if (nextDraft) {
 			return {
@@ -448,6 +450,12 @@ export default function ClientWorkflow({
 											<button
 												type="button"
 												className="btn btn-ghost btn-xs"
+												title={
+													document.draft_ready === false
+														? document.notes ||
+															"Waiting on per-client role assignments."
+														: (document.proposed_filename ?? "")
+												}
 												onClick={() => {
 													if (templatesDir) {
 														void onAddMultipleDocuments(
@@ -456,7 +464,9 @@ export default function ClientWorkflow({
 														);
 													}
 												}}
-												disabled={!templatesDir}
+												disabled={
+													!templatesDir || document.draft_ready === false
+												}
 											>
 												Draft
 											</button>

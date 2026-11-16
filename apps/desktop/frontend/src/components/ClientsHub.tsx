@@ -12,6 +12,7 @@ import MigrationDialog, {
 import QuestionnaireChooser, {
 	type QuestionnaireChoice,
 } from "@/components/QuestionnaireChooser";
+import QuestionnaireImportDialog from "@/components/QuestionnaireImportDialog";
 import PageHeader from "@/components/ui/PageHeader";
 import SectionHeading from "@/components/ui/SectionHeading";
 import { questionnaireDef as fallbackDef } from "@/data/questionnaireDef";
@@ -168,6 +169,7 @@ export default function ClientsHub() {
 	const [pendingNewClientDir, setPendingNewClientDir] = useState<string | null>(
 		null,
 	);
+	const [questionnaireImportOpen, setQuestionnaireImportOpen] = useState(false);
 
 	const libraryDirs = settings.client_library_dirs;
 
@@ -246,6 +248,13 @@ export default function ClientsHub() {
 			<PageHeader title="Clients" onBack={goToHub}>
 				<button
 					type="button"
+					className="btn btn-outline btn-sm"
+					onClick={() => setQuestionnaireImportOpen(true)}
+				>
+					New Client from PDF
+				</button>
+				<button
+					type="button"
 					className="btn btn-primary btn-sm"
 					onClick={pickClientFolder}
 				>
@@ -277,6 +286,17 @@ export default function ClientsHub() {
 					onReloadTrees={loadTrees}
 				/>
 			</div>
+
+			<QuestionnaireImportDialog
+				open={questionnaireImportOpen}
+				onClose={() => setQuestionnaireImportOpen(false)}
+				onCreated={(directory) => {
+					void (async () => {
+						await loadTrees();
+						await selectClient(directory);
+					})();
+				}}
+			/>
 		</div>
 	);
 }
