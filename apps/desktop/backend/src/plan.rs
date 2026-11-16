@@ -2983,6 +2983,14 @@ pub fn render_plan(
 	})
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentFlag {
+	pub severity: String,
+	pub message: String,
+	#[serde(default)]
+	pub path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PlanCandidateReport {
 	pub candidate_path: String,
@@ -2992,6 +3000,12 @@ pub struct PlanCandidateReport {
 	pub plan_version: u32,
 	pub blocks_rendered: usize,
 	pub warnings: Vec<String>,
+	#[serde(default)]
+	pub flags: Vec<AgentFlag>,
+	#[serde(default)]
+	pub summary: String,
+	#[serde(default)]
+	pub proposal_path: String,
 }
 
 fn candidate_output_path(docx: &Path) -> PathBuf {
@@ -3060,6 +3074,9 @@ pub fn render_plan_candidate(
 		plan_version: report.plan_version,
 		blocks_rendered: report.blocks_rendered,
 		warnings: report.warnings,
+		flags: Vec::new(),
+		summary: String::new(),
+		proposal_path: String::new(),
 	})
 }
 
@@ -3094,6 +3111,16 @@ pub fn discard_plan_candidate(candidate_path: String) -> Result<(), String> {
 				error
 			)
 		})?;
+	}
+	if let Some(parent) = candidate.parent() {
+		if parent
+			.file_name()
+			.and_then(|value| value.to_str())
+			.map(|value| value.starts_with("lily-agent-"))
+			.unwrap_or(false)
+		{
+			let _ = fs::remove_dir_all(parent);
+		}
 	}
 	Ok(())
 }

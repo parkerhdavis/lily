@@ -202,7 +202,7 @@ pub enum WorkflowWaitingOn {
 ///
 /// All variables are stored at the client level (shared across every document
 /// in the directory). Document entries track only provenance and timestamps.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LilyFile {
     /// Discriminator for .lily file types ("client", "questionnaire", etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -407,6 +407,27 @@ pub fn read_lily_file(working_dir: &str) -> Result<LilyFile, String> {
     }
 
     Ok(LilyFile::default())
+}
+
+/// Write a client `.lily` file from another module.
+pub fn write_client_lily(working_dir: &str, lily: &LilyFile) -> Result<(), String> {
+    write_lily_file(working_dir, lily)
+}
+
+/// Copy the client's current `.lily` file to a timestamped backup beside it.
+pub fn backup_client_lily(working_dir: &str) -> Result<Option<String>, String> {
+    let Some(path) = find_lily_files(working_dir)?.into_iter().next() else {
+        return Ok(None);
+    };
+    let stamp = Utc::now().format("%Y%m%d-%H%M%S%.3f");
+    let name = path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Client.lily".to_string());
+    let backup = path.with_file_name(format!("{}.bak-{}", name, stamp));
+    fs::copy(&path, &backup)
+        .map_err(|error| format!("Failed to back up {}: {}", path.display(), error))?;
+    Ok(Some(backup.to_string_lossy().to_string()))
 }
 
 /// Write the `.lily` file to disk.

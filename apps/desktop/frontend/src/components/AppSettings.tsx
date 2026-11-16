@@ -291,6 +291,64 @@ export default function AppSettings() {
 						</div>
 					</section>
 
+					{/* Drafting Agent */}
+					<section>
+						<SectionHeading className="mb-4">Drafting Agent</SectionHeading>
+						<div className="p-4 rounded-xl border border-base-300 bg-base-100 space-y-3">
+							<div>
+								<label className="text-sm font-medium mb-1 block">
+									Agent Command
+								</label>
+								<input
+									type="text"
+									className="input input-bordered input-sm w-full font-mono"
+									defaultValue={settings.agent_command ?? "opencode"}
+									onBlur={(event) =>
+										void save({ agent_command: event.target.value || null })
+									}
+								/>
+								<p className="text-xs text-base-content/40 mt-1">
+									The command that starts the external drafting agent.
+								</p>
+							</div>
+							<div>
+								<label className="text-sm font-medium mb-1 block">
+									Agent Model
+								</label>
+								<input
+									type="text"
+									className="input input-bordered input-sm w-full font-mono"
+									defaultValue={settings.agent_model ?? ""}
+									placeholder="provider/model#variant"
+									onBlur={(event) =>
+										void save({ agent_model: event.target.value || null })
+									}
+								/>
+								<p className="text-xs text-base-content/40 mt-1">
+									Optional model override passed to the agent command.
+								</p>
+							</div>
+							<div>
+								<label className="text-sm font-medium mb-1 block">
+									Lily Repository
+								</label>
+								<input
+									type="text"
+									className="input input-bordered input-sm w-full font-mono"
+									defaultValue={settings.agent_repo_dir ?? ""}
+									placeholder="~/Software/lily"
+									onBlur={(event) =>
+										void save({ agent_repo_dir: event.target.value || null })
+									}
+								/>
+								<p className="text-xs text-base-content/40 mt-1">
+									The directory where the agent finds the Lily CLI and plan
+									tools.
+								</p>
+							</div>
+						</div>
+					</section>
+
 					{/* About */}
 					<section>
 						<SectionHeading className="mb-4">About</SectionHeading>

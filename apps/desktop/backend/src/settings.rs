@@ -59,6 +59,15 @@ pub struct AppSettings {
     /// Persisted navigation history for "recent pages" on the hub.
     #[serde(default)]
     pub navigation_history: Vec<PersistedNavEntry>,
+    /// Command that starts the external drafting agent (default: opencode).
+    #[serde(default)]
+    pub agent_command: Option<String>,
+    /// Optional model passed to the drafting agent.
+    #[serde(default)]
+    pub agent_model: Option<String>,
+    /// Directory where the Lily repository and its CLI live, for the agent.
+    #[serde(default)]
+    pub agent_repo_dir: Option<String>,
 }
 
 fn settings_path() -> Result<PathBuf, String> {

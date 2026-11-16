@@ -2,6 +2,7 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod agent;
 mod docx_ops;
 mod history;
 mod lily_file;
@@ -38,6 +39,7 @@ use plan::{
     approve_plan_candidate, audit_plan_document, discard_plan_candidate, render_plan_candidate,
     render_plan_document,
 };
+use agent::{approve_agent_candidate, run_draft_agent};
 use history::{
     diff_document_versions, list_document_versions, restore_document_version, snapshot_document,
 };
@@ -139,6 +141,8 @@ fn main() {
             render_plan_document,
             render_plan_candidate,
             approve_plan_candidate,
+            run_draft_agent,
+            approve_agent_candidate,
             discard_plan_candidate,
             audit_plan_document,
             snapshot_document,

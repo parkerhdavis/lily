@@ -30,6 +30,16 @@ The renderer preserves the template's layout, but it does not decide page breaks
 
 The plan carries `keep_with_next`, `page_break_before`, and `keep_together` on a block. After a layout review, set them on the block that needs the hint; the renderer emits `w:keepNext`, `w:pageBreakBefore`, and `w:keepLines`. Do not edit the template to force a break.
 
+## App Assist Mode
+
+When the Lily app invokes the agent, it passes the client directory, plan, document, and output directory in the prompt and sets `LILY_AGENT_OUT`, `LILY_AGENT_CLIENT`, `LILY_AGENT_PLAN`, `LILY_AGENT_DOCX`, and `LILY_AGENT_REPO`. In that mode the agent writes three files instead of editing the client:
+
+- `$LILY_AGENT_OUT/proposal.lily`: a copy of the client `.lily` with only `variables` and `contact_bindings` changed.
+- `$LILY_AGENT_OUT/flags.json`: a JSON array of objects with `severity` (`info`, `warning`, or `gap`), `message`, and an optional `path`.
+- `$LILY_AGENT_OUT/summary.md`: a short explanation of every proposed change and flag.
+
+The app renders the proposal as a candidate, shows the diff and flags, and the attorney approves before the client or the document changes. In this mode, never edit the client's `.lily`, the plan, or the document.
+
 ## Rules
 
 - Never edit OOXML. The plan, the client data, and the approved clauses are the only inputs.
@@ -73,4 +83,4 @@ The `plan render` command resolves the plan's `layout` path relative to the plan
 
 - Template authoring and compilation: the `lily-template-author` skill.
 - The plan schema, clause model, and excerpt model: the Lily design note in the software wiki.
-- The app review surface is still pending. Until it lands, this loop runs from the agent's shell and the attorney reviews the candidate document and diff.
+- The app's agent mode reads `proposal.lily`, `flags.json`, and `summary.md` and shows the candidate, diff, and flags for approval.

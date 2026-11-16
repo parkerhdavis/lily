@@ -34,6 +34,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		questionnaires_dir: null,
 		client_library_dirs: [],
 		navigation_history: [],
+		agent_command: null,
+		agent_model: null,
+		agent_repo_dir: null,
 	},
 	loaded: false,
 

@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useRef, useState } from "react";
 import DiffView from "@/components/DiffView";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import type { PlanCandidateReport } from "@/types";
 
@@ -23,11 +24,13 @@ export default function DraftCandidate({
 	const [tab, setTab] = useState<"candidate" | "diff">("candidate");
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [agentBusy, setAgentBusy] = useState(false);
 	const dialogRef = useRef<HTMLDialogElement>(null);
 	const workingDir = useWorkflowStore((state) => state.workingDir);
 	const variableValues = useWorkflowStore((state) => state.variableValues);
 	const dirty = useWorkflowStore((state) => state.dirty);
 	const refreshPreview = useWorkflowStore((state) => state.refreshPreview);
+	const settings = useSettingsStore((state) => state.settings);
 
 	const render = useCallback(async () => {
 		if (!planPath || !documentPath || !skeletonPath) return;
@@ -60,6 +63,45 @@ export default function DraftCandidate({
 		}
 	}, [planPath, documentPath, skeletonPath, workingDir, variableValues, dirty]);
 
+	const runAgent = useCallback(async () => {
+		if (!planPath || !documentPath || !skeletonPath || !workingDir) return;
+		setAgentBusy(true);
+		setError(null);
+		try {
+			if (dirty) {
+				await invoke("save_client_variables", {
+					workingDir,
+					variableValues,
+				});
+			}
+			const result = await invoke<PlanCandidateReport>("run_draft_agent", {
+				docxPath: documentPath,
+				planPath,
+				skeletonPath,
+				agentCommand: settings.agent_command ?? null,
+				agentModel: settings.agent_model ?? null,
+				agentRepoDir: settings.agent_repo_dir ?? null,
+			});
+			setCandidate(result);
+			setTab("candidate");
+			dialogRef.current?.showModal();
+		} catch (err) {
+			setError(String(err));
+		} finally {
+			setAgentBusy(false);
+		}
+	}, [
+		planPath,
+		documentPath,
+		skeletonPath,
+		workingDir,
+		dirty,
+		variableValues,
+		settings.agent_command,
+		settings.agent_model,
+		settings.agent_repo_dir,
+	]);
+
 	const discard = useCallback(async () => {
 		if (!candidate) return;
 		try {
@@ -85,10 +127,19 @@ export default function DraftCandidate({
 		setBusy(true);
 		setError(null);
 		try {
-			await invoke("approve_plan_candidate", {
-				docxPath: documentPath,
-				candidatePath: candidate.candidate_path,
-			});
+			if (candidate.proposal_path && workingDir) {
+				await invoke("approve_agent_candidate", {
+					docxPath: documentPath,
+					candidatePath: candidate.candidate_path,
+					clientDir: workingDir,
+					proposalPath: candidate.proposal_path,
+				});
+			} else {
+				await invoke("approve_plan_candidate", {
+					docxPath: documentPath,
+					candidatePath: candidate.candidate_path,
+				});
+			}
 			await refreshPreview();
 			useWorkflowStore.setState({ dirty: false });
 			setCandidate(null);
@@ -98,7 +149,7 @@ export default function DraftCandidate({
 		} finally {
 			setBusy(false);
 		}
-	}, [candidate, documentPath, refreshPreview]);
+	}, [candidate, documentPath, workingDir, refreshPreview]);
 
 	if (!planPath || !documentPath || !skeletonPath) return null;
 
@@ -122,18 +173,35 @@ export default function DraftCandidate({
 						the draft.
 					</p>
 					{error && <p className="text-error">{error}</p>}
-					<button
-						type="button"
-						className="btn btn-primary btn-xs"
-						onClick={() => void render()}
-						disabled={busy}
-					>
-						{busy ? (
-							<span className="loading loading-spinner loading-xs" />
-						) : (
-							"Review candidate"
-						)}
-					</button>
+					<div className="flex flex-wrap gap-2">
+						<button
+							type="button"
+							className="btn btn-primary btn-xs"
+							onClick={() => void render()}
+							disabled={busy || agentBusy}
+						>
+							{busy ? (
+								<span className="loading loading-spinner loading-xs" />
+							) : (
+								"Review candidate"
+							)}
+						</button>
+						<button
+							type="button"
+							className="btn btn-secondary btn-xs"
+							onClick={() => void runAgent()}
+							disabled={busy || agentBusy || !workingDir}
+						>
+							{agentBusy ? (
+								<>
+									<span className="loading loading-spinner loading-xs" />
+									Drafting…
+								</>
+							) : (
+								"Draft with agent"
+							)}
+						</button>
+					</div>
 				</div>
 			)}
 
@@ -161,6 +229,37 @@ export default function DraftCandidate({
 								))}
 							</ul>
 						</div>
+					)}
+					{candidate && candidate.flags.length > 0 && (
+						<div className="mt-3 space-y-1">
+							{candidate.flags.map((flag, index) => (
+								<div
+									key={`${flag.severity}-${index}`}
+									className={`alert py-2 text-xs ${
+										flag.severity === "gap"
+											? "alert-error"
+											: flag.severity === "warning"
+												? "alert-warning"
+												: "alert-info"
+									}`}
+								>
+									<span className="font-semibold uppercase">
+										{flag.severity}
+									</span>
+									<span>{flag.message}</span>
+								</div>
+							))}
+						</div>
+					)}
+					{candidate?.summary && (
+						<details className="mt-3 rounded border border-base-300 bg-base-200/40 p-2 text-xs">
+							<summary className="cursor-pointer font-semibold">
+								Agent summary
+							</summary>
+							<pre className="mt-2 whitespace-pre-wrap font-sans">
+								{candidate.summary}
+							</pre>
+						</details>
 					)}
 					{error && <p className="mt-2 text-sm text-error">{error}</p>}
 					<div role="tablist" className="tabs tabs-boxed mt-3 w-fit">

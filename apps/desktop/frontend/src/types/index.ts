@@ -61,6 +61,9 @@ export interface AppSettings {
 	questionnaires_dir: string | null;
 	client_library_dirs: string[];
 	navigation_history: PersistedNavEntry[];
+	agent_command: string | null;
+	agent_model: string | null;
+	agent_repo_dir: string | null;
 }
 
 export type WorkflowStep =
@@ -331,6 +334,12 @@ export interface DocumentDiffLine {
 
 /** A plan rendered to a temporary candidate, with its diff against the
  *  current document. */
+export interface AgentFlag {
+	severity: string;
+	message: string;
+	path?: string | null;
+}
+
 export interface PlanCandidateReport {
 	candidate_path: string;
 	candidate_html: string;
@@ -339,6 +348,9 @@ export interface PlanCandidateReport {
 	plan_version: number;
 	blocks_rendered: number;
 	warnings: string[];
+	flags: AgentFlag[];
+	summary: string;
+	proposal_path: string;
 }
 
 /** A node in the template folder tree. */
