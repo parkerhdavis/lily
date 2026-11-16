@@ -5,8 +5,6 @@ import AppSettings from "@/components/AppSettings";
 import ClientsHub from "@/components/ClientsHub";
 import LilyHub from "@/components/LilyHub";
 import PipelineHub from "@/components/PipelineHub";
-import Questionnaire from "@/components/Questionnaire";
-import QuestionnaireEditor from "@/components/QuestionnaireEditor";
 import TemplatePicker from "@/components/TemplatePicker";
 import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import KeyboardShortcutsModal from "@/components/ui/KeyboardShortcutsModal";
@@ -155,8 +153,6 @@ export default function App() {
 				return <LilyHub />;
 			case "clients":
 				return <ClientsHub />;
-			case "questionnaire":
-				return <Questionnaire />;
 			case "select-template":
 				return <TemplatePicker />;
 			case "edit-variables":
@@ -165,8 +161,6 @@ export default function App() {
 				return <AppSettings />;
 			case "pipeline":
 				return <PipelineHub />;
-			case "questionnaire-editor":
-				return <QuestionnaireEditor />;
 		}
 	})();
 

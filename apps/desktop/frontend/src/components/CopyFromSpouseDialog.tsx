@@ -155,8 +155,8 @@ export default function CopyFromSpouseDialog({
 						<p className="text-base-content/70 mb-4">
 							Pick the folder of this client's spouse. We'll create this
 							client's .lily by promoting the spouse's chosen contact to client,
-							copying questionnaire data and contacts, and recreating documents
-							from template with swapped values.
+							copying client data and contacts, and recreating documents from
+							template with swapped values.
 						</p>
 						<div className="alert alert-info text-sm mb-4">
 							Manual edits made to the spouse's .docx files (outside the

@@ -31,7 +31,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 		last_step: null,
 		attorney_name: null,
 		autosave: null,
-		questionnaires_dir: null,
 		client_library_dirs: [],
 		navigation_history: [],
 		agent_command: null,

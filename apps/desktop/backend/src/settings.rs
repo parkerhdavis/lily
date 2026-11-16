@@ -50,9 +50,6 @@ pub struct AppSettings {
     /// Whether editors auto-save changes. Defaults to true when absent.
     #[serde(default)]
     pub autosave: Option<bool>,
-    /// Path to the directory containing questionnaire definition .lily files.
-    #[serde(default)]
-    pub questionnaires_dir: Option<String>,
     /// Directories containing client folders (like templates_dir but for clients).
     #[serde(default)]
     pub client_library_dirs: Vec<String>,

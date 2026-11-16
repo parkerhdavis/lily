@@ -4,29 +4,16 @@ import { open, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ClientWorkflow from "@/components/ClientWorkflow";
 import CopyFromSpouseDialog from "@/components/CopyFromSpouseDialog";
-import MigrationDialog, {
-	type FieldMapping,
-	type MigrationReport,
-	type OrphanedVariable,
-} from "@/components/MigrationDialog";
-import QuestionnaireChooser, {
-	type QuestionnaireChoice,
-} from "@/components/QuestionnaireChooser";
+import QuestionnaireCard from "@/components/QuestionnaireCard";
 import QuestionnaireImportDialog from "@/components/QuestionnaireImportDialog";
 import PageHeader from "@/components/ui/PageHeader";
 import SectionHeading from "@/components/ui/SectionHeading";
-import { questionnaireDef as fallbackDef } from "@/data/questionnaireDef";
 import { useLilyIcon } from "@/hooks/useLilyIcon";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToastStore } from "@/stores/toastStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import type { ClientTreeNode } from "@/types";
-import type {
-	QuestionnaireDefFile,
-	QuestionnaireSectionDef,
-} from "@/types/questionnaire";
 import { extractFilename, extractFolderName } from "@/utils/path";
-import { scopedQuestionnaireSections } from "@/utils/questionnaireScope";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -59,74 +46,6 @@ function isClientInTree(nodes: ClientTreeNode[], path: string): boolean {
 	return false;
 }
 
-// ─── Questionnaire variable extraction ──────────────────────────────────
-
-/** Extract all variable names defined by a questionnaire's sections. */
-function extractQuestionnaireVariables(
-	sections: QuestionnaireSectionDef[],
-): Set<string> {
-	const vars = new Set<string>();
-	for (const section of sections) {
-		if (section.kind === "contacts") continue;
-		for (const q of section.questions) {
-			if (q.kind === "text" || q.kind === "conditional") {
-				vars.add(q.variable);
-			} else if (q.kind === "contact-role") {
-				for (const varName of Object.keys(q.variableMappings)) {
-					vars.add(varName);
-				}
-			}
-		}
-	}
-	return vars;
-}
-
-/** Compute a migration report by comparing client variables against the
- *  current questionnaire definition. */
-function computeMigrationReport(
-	lilyFile: import("@/types").LilyFile,
-	qDef: QuestionnaireDefFile,
-): MigrationReport | null {
-	const clientVersion = lilyFile.questionnaire_version ?? 0;
-	if (clientVersion >= qDef.version) return null;
-
-	const qVars = extractQuestionnaireVariables(qDef.sections);
-
-	// Gather all variable names referenced by documents
-	const docVars = new Set<string>();
-	for (const meta of Object.values(lilyFile.documents ?? {})) {
-		for (const v of meta.variable_names ?? []) {
-			docVars.add(v);
-		}
-	}
-
-	// Orphaned: have a value, not in questionnaire, not in documents
-	const orphaned: OrphanedVariable[] = [];
-	for (const [name, value] of Object.entries(lilyFile.variables ?? {})) {
-		if (!value.trim()) continue; // skip empty values
-		if (qVars.has(name)) continue; // still in questionnaire
-		if (docVars.has(name)) continue; // used by a document
-		orphaned.push({ name, value });
-	}
-
-	// Unfilled: in questionnaire, no value in .lily
-	const clientVars = lilyFile.variables ?? {};
-	const unfilled: string[] = [];
-	for (const v of qVars) {
-		if (!clientVars[v]?.trim()) {
-			unfilled.push(v);
-		}
-	}
-
-	if (orphaned.length === 0) return null; // nothing to migrate
-
-	return {
-		orphaned,
-		unfilled,
-		currentVersion: qDef.version,
-	};
-}
-
 // ─── Local types ─────────────────────────────────────────────────────────
 
 interface LibraryTree {
@@ -153,7 +72,6 @@ export default function ClientsHub() {
 		goToHub,
 		goToSettings,
 		openDocument,
-		openQuestionnaire,
 		startAddDocument,
 		deleteDocument,
 		newVersionDocument,
@@ -273,9 +191,8 @@ export default function ClientsHub() {
 					onSetPendingNewClientDir={setPendingNewClientDir}
 					onSelectClient={selectClient}
 					onGoToSettings={goToSettings}
-					lilyIcon={lilyIcon}
 					settings={settings}
-					onOpenQuestionnaire={openQuestionnaire}
+					lilyIcon={lilyIcon}
 					onStartAddDocument={startAddDocument}
 					onOpenDocument={openDocument}
 					onDeleteDocument={deleteDocument}
@@ -313,9 +230,8 @@ function ClientsTreeTab({
 	onSetPendingNewClientDir,
 	onSelectClient,
 	onGoToSettings,
-	lilyIcon,
 	settings,
-	onOpenQuestionnaire,
+	lilyIcon,
 	onStartAddDocument,
 	onOpenDocument,
 	onDeleteDocument,
@@ -336,7 +252,6 @@ function ClientsTreeTab({
 	onGoToSettings: () => void;
 	lilyIcon: string;
 	settings: import("@/types").AppSettings;
-	onOpenQuestionnaire: () => void;
 	onStartAddDocument: () => void;
 	onOpenDocument: (filename: string, templateRelPath: string) => void;
 	onDeleteDocument: (filename: string) => Promise<void>;
@@ -350,8 +265,6 @@ function ClientsTreeTab({
 	onReloadTrees: () => Promise<void>;
 }) {
 	const [creatingClient, setCreatingClient] = useState(false);
-	const [chosenQuestionnaire, setChosenQuestionnaire] =
-		useState<QuestionnaireChoice | null>(null);
 
 	const allTreeNodes = useMemo(() => trees.flatMap((t) => t.nodes), [trees]);
 
@@ -374,8 +287,6 @@ function ClientsTreeTab({
 		try {
 			await invoke("create_lily_file", {
 				workingDir: pendingNewClientDir,
-				questionnaireId: chosenQuestionnaire?.id ?? null,
-				questionnaireVersion: chosenQuestionnaire?.version ?? null,
 			});
 			await onReloadTrees();
 			onSetPendingNewClientDir(null);
@@ -390,7 +301,6 @@ function ClientsTreeTab({
 		}
 	}, [
 		pendingNewClientDir,
-		chosenQuestionnaire,
 		onSelectClient,
 		onReloadTrees,
 		onSetPendingNewClientDir,
@@ -463,15 +373,9 @@ function ClientsTreeTab({
 						{extractFolderName(pendingNewClientDir)}
 					</h3>
 					<p className="text-sm text-base-content/60 text-center max-w-sm">
-						This folder doesn't have a client project file yet. Choose a
-						questionnaire and create one to get started.
+						This folder doesn't have a client project file yet. Create one, then
+						attach the filled questionnaire PDF from the client card.
 					</p>
-					<div className="w-full max-w-xs text-left rounded-lg border border-base-300 bg-base-200/40 p-3">
-						<p className="text-xs font-medium text-base-content/60 mb-1">
-							Questionnaire
-						</p>
-						<QuestionnaireChooser onChange={setChosenQuestionnaire} />
-					</div>
 					<div className="flex gap-2">
 						<button
 							type="button"
@@ -497,9 +401,7 @@ function ClientsTreeTab({
 				<ClientContentPane
 					workingDir={workingDir}
 					lilyFile={lilyFile}
-					lilyIcon={lilyIcon}
 					settings={settings}
-					onOpenQuestionnaire={onOpenQuestionnaire}
 					onStartAddDocument={onStartAddDocument}
 					onOpenDocument={onOpenDocument}
 					onDeleteDocument={onDeleteDocument}
@@ -522,9 +424,7 @@ function ClientsTreeTab({
 function ClientContentPane({
 	workingDir,
 	lilyFile,
-	lilyIcon,
 	settings,
-	onOpenQuestionnaire,
 	onStartAddDocument,
 	onOpenDocument,
 	onDeleteDocument,
@@ -535,9 +435,7 @@ function ClientContentPane({
 }: {
 	workingDir: string;
 	lilyFile: import("@/types").LilyFile;
-	lilyIcon: string;
 	settings: import("@/types").AppSettings;
-	onOpenQuestionnaire: () => void;
 	onStartAddDocument: () => void;
 	onOpenDocument: (filename: string, templateRelPath: string) => void;
 	onDeleteDocument: (filename: string) => Promise<void>;
@@ -549,6 +447,7 @@ function ClientContentPane({
 	onOpenTemplateFile: (templateRelPath: string) => Promise<void>;
 	onLoadTemplates: (templatesDir: string) => Promise<void>;
 }) {
+	const reloadLilyFile = useWorkflowStore((state) => state.reloadLilyFile);
 	const [docSearch, setDocSearch] = useState("");
 	const [showCopyFromSpouse, setShowCopyFromSpouse] = useState(false);
 
@@ -570,28 +469,6 @@ function ClientContentPane({
 		})();
 	}, [workingDir, lilyFile]);
 
-	// Dynamic questionnaire definition for stats + migration
-	const [qDef, setQDef] = useState<QuestionnaireSectionDef[]>(fallbackDef);
-	const [migrationReport, setMigrationReport] =
-		useState<MigrationReport | null>(null);
-	useEffect(() => {
-		(async () => {
-			try {
-				// Only the client's own stamped questionnaire drives stats/migration.
-				// An un-stamped client keeps the compiled-in fallback def until the
-				// user picks one (prompted when they open the questionnaire).
-				if (!lilyFile.questionnaire_id) return;
-				const def = await invoke<QuestionnaireDefFile>("load_questionnaire", {
-					id: lilyFile.questionnaire_id,
-				});
-				setQDef(def.sections);
-				setMigrationReport(computeMigrationReport(lilyFile, def));
-			} catch {
-				// Use fallback
-			}
-		})();
-	}, [lilyFile.questionnaire_id, lilyFile]);
-
 	const allDocs = useMemo(() => {
 		if (!lilyFile.documents) return [];
 		return Object.entries(lilyFile.documents)
@@ -602,61 +479,6 @@ function ClientContentPane({
 			}))
 			.sort((a, b) => a.filename.localeCompare(b.filename));
 	}, [lilyFile]);
-
-	const scopedQDef = useMemo(
-		() => scopedQuestionnaireSections(qDef, lilyFile.required_documents),
-		[qDef, lilyFile.required_documents],
-	);
-
-	const questionnaireStats = useMemo(() => {
-		const vars = lilyFile.variables ?? {};
-		const contactCount = lilyFile.contacts?.length ?? 0;
-		let total = 0;
-		let filled = 0;
-		for (const section of scopedQDef) {
-			if (section.kind === "contacts") {
-				total++;
-				if (contactCount > 0) filled++;
-				continue;
-			}
-			for (const q of section.questions) {
-				if (q.kind === "text") {
-					total++;
-					if (vars[q.variable]?.trim()) filled++;
-				}
-			}
-		}
-		return { total, filled };
-	}, [lilyFile, scopedQDef]);
-
-	const handleApplyMigration = useCallback(
-		async (mappings: FieldMapping[], removeOrphaned: string[]) => {
-			if (!migrationReport) return;
-			try {
-				const updated = await invoke<import("@/types").LilyFile>(
-					"apply_variable_migration",
-					{
-						workingDir,
-						mappings,
-						removeOrphaned,
-						newQuestionnaireVersion: migrationReport.currentVersion,
-					},
-				);
-				useWorkflowStore.setState({ lilyFile: updated });
-				setMigrationReport(null);
-				useToastStore
-					.getState()
-					.addToast("success", "Migration applied successfully");
-			} catch (err) {
-				useToastStore.getState().addToast("error", `Migration failed: ${err}`);
-			}
-		},
-		[workingDir, migrationReport],
-	);
-
-	const handleSkipMigration = useCallback(() => {
-		setMigrationReport(null);
-	}, []);
 
 	const handleAddDocument = () => {
 		if (settings.templates_dir) {
@@ -772,9 +594,8 @@ function ClientContentPane({
 	const folderName = extractFolderName(workingDir);
 	const contactCount = lilyFile.contacts?.length ?? 0;
 	const docCount = allDocs.length;
-	// A brand-new client now always has a questionnaire_id stamped at creation
-	// (the Create Client pane pre-selects one), so questionnaire_id is no longer
-	// a "fresh workspace" signal — emptiness of the actual client data is.
+	// A client imported from a PDF already has contacts and documents, so use
+	// the actual client data rather than the legacy questionnaire id.
 	const isFreshWorkspace =
 		docCount === 0 &&
 		contactCount === 0 &&
@@ -783,13 +604,6 @@ function ClientContentPane({
 
 	return (
 		<>
-			{migrationReport && (
-				<MigrationDialog
-					report={migrationReport}
-					onApply={handleApplyMigration}
-					onSkip={handleSkipMigration}
-				/>
-			)}
 			{showCopyFromSpouse && (
 				<CopyFromSpouseDialog
 					targetDir={workingDir}
@@ -878,8 +692,8 @@ function ClientContentPane({
 										Spouse already set up?
 									</div>
 									<div className="text-sm text-base-content/60 mt-0.5">
-										Copy questionnaire data, contacts, and documents from their
-										folder, with the client/spouse swap applied.
+										Copy client data, contacts, and documents from their folder,
+										with the client/spouse swap applied.
 									</div>
 								</div>
 								<button
@@ -891,53 +705,15 @@ function ClientContentPane({
 								</button>
 							</div>
 						)}
-						{/* Questionnaire card */}
-						<button
-							type="button"
-							className="w-full text-left p-5 rounded-xl border-2 border-primary/40 bg-base-100 shadow-[0_4px_16px_rgba(0,0,0,0.25)] hover:shadow-[0_8px_28px_rgba(0,0,0,0.35)] transition-shadow"
-							onClick={onOpenQuestionnaire}
-						>
-							<div className="flex items-center gap-4">
-								<img src={lilyIcon} alt="" className="size-9 opacity-60" />
-								<div className="flex-1 min-w-0">
-									<div className="font-semibold text-base">
-										Client Questionnaire
-									</div>
-									<div className="text-sm text-base-content/50 mt-0.5">
-										{questionnaireStats.total > 0
-											? `${questionnaireStats.filled} of ${questionnaireStats.total} fields filled`
-											: "Fill out client information"}
-										{contactCount > 0 &&
-											` \u00B7 ${contactCount} contact${contactCount !== 1 ? "s" : ""}`}
-									</div>
-								</div>
-								{questionnaireStats.total > 0 && (
-									<div
-										className="radial-progress text-primary text-sm"
-										style={
-											{
-												"--value": Math.round(
-													(questionnaireStats.filled /
-														questionnaireStats.total) *
-														100,
-												),
-												"--size": "3rem",
-												"--thickness": "3px",
-											} as React.CSSProperties
-										}
-										role="progressbar"
-									>
-										{questionnaireStats.filled}/{questionnaireStats.total}
-									</div>
-								)}
-							</div>
-						</button>
+						<QuestionnaireCard
+							workingDir={workingDir}
+							lilyFile={lilyFile}
+							onReload={reloadLilyFile}
+						/>
 
 						<ClientWorkflow
 							lilyFile={lilyFile}
-							questionnaireStats={questionnaireStats}
 							templatesDir={settings.templates_dir}
-							onOpenQuestionnaire={onOpenQuestionnaire}
 							onStartAddDocument={onStartAddDocument}
 							onOpenDocument={onOpenDocument}
 							onAddMultipleDocuments={onAddMultipleDocuments}

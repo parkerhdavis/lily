@@ -50,8 +50,6 @@ export function navLabel(
 			return "Lily Hub";
 		case "clients":
 			return folderName ? `Clients \u203A ${folderName}` : "Clients";
-		case "questionnaire":
-			return `${folderName} \u203A Questionnaire`;
 		case "select-template":
 			return `${folderName} \u203A Add Document`;
 		case "edit-variables":
@@ -60,8 +58,6 @@ export function navLabel(
 			return "Settings";
 		case "pipeline":
 			return "Pipeline";
-		case "questionnaire-editor":
-			return "Pipeline \u203A Questionnaire Editor";
 		default:
 			return step;
 	}

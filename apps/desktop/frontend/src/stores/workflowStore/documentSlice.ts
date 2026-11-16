@@ -270,7 +270,7 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 			}
 
 			// Sync current values into the .docx so it reflects the
-			// latest questionnaire data without requiring a manual save
+			// latest client data without requiring a manual save
 			const settings = useSettingsStore.getState().settings;
 			let templateSchema: VariableSchema | null = null;
 			if (settings.templates_dir && docTemplateRelPath) {

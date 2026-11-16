@@ -3,9 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import PageHeader from "@/components/ui/PageHeader";
 import SectionHeading from "@/components/ui/SectionHeading";
 import { useLilyIcon } from "@/hooks/useLilyIcon";
-import { useQuestionnaireStore } from "@/stores/questionnaireStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useToastStore } from "@/stores/toastStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 
 export default function AppSettings() {
@@ -49,33 +47,6 @@ export default function AppSettings() {
 	const removeClientLibraryDir = (dir: string) => {
 		const dirs = (settings.client_library_dirs ?? []).filter((d) => d !== dir);
 		save({ client_library_dirs: dirs });
-	};
-
-	const pickQuestionnairesDir = async () => {
-		const selected = await open({
-			directory: true,
-			title: "Select Questionnaire Library Path",
-			defaultPath: settings.questionnaires_dir ?? undefined,
-		});
-		if (selected) {
-			await save({ questionnaires_dir: selected });
-			// Migrate any existing questionnaires from old config-dir storage
-			try {
-				const count = await useQuestionnaireStore
-					.getState()
-					.migrateQuestionnaires();
-				if (count > 0) {
-					useToastStore
-						.getState()
-						.addToast(
-							"success",
-							`Migrated ${count} questionnaire${count > 1 ? "s" : ""} to new folder`,
-						);
-				}
-			} catch {
-				// Migration is best-effort — folder is still set
-			}
-		}
 	};
 
 	return (
@@ -271,22 +242,6 @@ export default function AppSettings() {
 								onClick={pickTemplatesDir}
 							>
 								Add Template Library Path
-							</button>
-							<div className="border-t border-base-300 my-3" />
-							<div>
-								<p className="text-sm font-medium mb-1">
-									Questionnaire Libraries
-								</p>
-								<p className="text-xs text-base-content/40 font-mono break-all">
-									{settings.questionnaires_dir ?? "Not configured"}
-								</p>
-							</div>
-							<button
-								type="button"
-								className="btn btn-outline btn-sm"
-								onClick={pickQuestionnairesDir}
-							>
-								Add Questionnaire Library Path
 							</button>
 						</div>
 					</section>

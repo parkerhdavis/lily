@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import PageHeader from "@/components/ui/PageHeader";
 import SectionHeading from "@/components/ui/SectionHeading";
 import { useLilyIcon } from "@/hooks/useLilyIcon";
-import { useQuestionnaireStore } from "@/stores/questionnaireStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 import { loadTemplateVariables } from "@/stores/workflowStore/helpers";
@@ -14,7 +13,6 @@ import type {
 	TemplateTreeNode,
 	VariableInfo,
 } from "@/types";
-import type { QuestionnaireIndex } from "@/types/questionnaire";
 import { extractFilename } from "@/utils/path";
 
 // ─── Tree building (reused from TemplatePicker) ─────────────────────────────
@@ -69,16 +67,6 @@ type PipelineTab = "templates" | "processes" | "team";
 export default function PipelineHub() {
 	const { settings, save } = useSettingsStore();
 	const goToHub = useWorkflowStore((s) => s.goToHub);
-	const goToSettings = useWorkflowStore((s) => s.goToSettings);
-	const goToQuestionnaireEditor = useWorkflowStore(
-		(s) => s.goToQuestionnaireEditor,
-	);
-	const {
-		index: questionnaireIndex,
-		loadIndex: loadQuestionnaireIndex,
-		loadQuestionnaire,
-		createQuestionnaire,
-	} = useQuestionnaireStore();
 
 	const [activeTab, setActiveTab] = useState<PipelineTab>("templates");
 	const [templates, setTemplates] = useState<string[]>([]);
@@ -87,11 +75,6 @@ export default function PipelineHub() {
 	const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 	const [templateVars, setTemplateVars] = useState<VariableInfo[]>([]);
 	const [loadingVars, setLoadingVars] = useState(false);
-
-	// Load questionnaire index on mount
-	useEffect(() => {
-		loadQuestionnaireIndex();
-	}, [loadQuestionnaireIndex]);
 
 	// Load templates on mount
 	useEffect(() => {
@@ -217,18 +200,6 @@ export default function PipelineHub() {
 						onOpenInEditor={openInEditor}
 						onOpenReference={openReference}
 						onPickTemplatesDir={pickTemplatesDir}
-						questionnaireIndex={questionnaireIndex}
-						questionnairesDir={settings.questionnaires_dir}
-						onOpenQuestionnaire={async (id) => {
-							await loadQuestionnaire(id);
-							goToQuestionnaireEditor();
-						}}
-						onNewQuestionnaire={async () => {
-							const def = await createQuestionnaire("New Questionnaire");
-							await loadQuestionnaire(def.id);
-							goToQuestionnaireEditor();
-						}}
-						onGoToSettings={goToSettings}
 					/>
 				)}
 				{activeTab === "processes" && (
@@ -264,17 +235,11 @@ function TemplatesTab({
 	onOpenInEditor,
 	onOpenReference,
 	onPickTemplatesDir,
-	questionnaireIndex,
-	questionnairesDir,
-	onOpenQuestionnaire,
-	onNewQuestionnaire,
-	onGoToSettings,
 }: {
 	tree: TemplateTreeNode[];
 	referenceDocs: ReferenceDocument[];
 	loading: boolean;
 	templatesDir: string | null;
-	questionnairesDir: string | null;
 	selectedTemplate: string | null;
 	templateVars: VariableInfo[];
 	replacementVars: VariableInfo[];
@@ -284,10 +249,6 @@ function TemplatesTab({
 	onOpenInEditor: () => void;
 	onOpenReference: (relPath: string) => void;
 	onPickTemplatesDir: () => void;
-	questionnaireIndex: QuestionnaireIndex | null;
-	onOpenQuestionnaire: (id: string) => void;
-	onNewQuestionnaire: () => void;
-	onGoToSettings: () => void;
 }) {
 	if (!templatesDir) {
 		return (
@@ -318,78 +279,6 @@ function TemplatesTab({
 		<div className="flex h-full">
 			{/* Left: template tree */}
 			<div className="w-72 shrink-0 border-r border-base-300 overflow-y-auto p-4">
-				{/* CLIENT SETUP section */}
-				<SectionHeading className="mb-3">Client Setup</SectionHeading>
-				<div className="flex flex-col gap-0.5 mb-4">
-					{!questionnairesDir ? (
-						<div className="px-3 py-2 space-y-2">
-							<p className="text-xs text-base-content/40">
-								Set a questionnaires folder in Settings to manage questionnaire
-								definitions.
-							</p>
-							<button
-								type="button"
-								className="btn btn-ghost btn-xs text-base-content/50"
-								onClick={onGoToSettings}
-							>
-								Open Settings
-							</button>
-						</div>
-					) : (
-						<>
-							{questionnaireIndex?.questionnaires.map((q) => (
-								<button
-									key={q.id}
-									type="button"
-									className="btn btn-ghost btn-sm justify-start text-left w-full h-auto py-2 px-3 font-normal gap-2"
-									onClick={() => onOpenQuestionnaire(q.id)}
-								>
-									<svg
-										xmlns="http://www.w3.org/2000/svg"
-										className="h-4 w-4 shrink-0 opacity-50"
-										fill="none"
-										viewBox="0 0 24 24"
-										stroke="currentColor"
-									>
-										<title>Questionnaire</title>
-										<path
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											strokeWidth={2}
-											d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
-										/>
-									</svg>
-									<span className="truncate flex-1">{q.name}</span>
-								</button>
-							))}
-							<button
-								type="button"
-								className="btn btn-ghost btn-sm justify-start text-left w-full h-auto py-2 px-3 font-normal gap-2 text-base-content/50"
-								onClick={onNewQuestionnaire}
-							>
-								<svg
-									xmlns="http://www.w3.org/2000/svg"
-									className="h-4 w-4 shrink-0 opacity-50"
-									fill="none"
-									viewBox="0 0 24 24"
-									stroke="currentColor"
-								>
-									<title>New</title>
-									<path
-										strokeLinecap="round"
-										strokeLinejoin="round"
-										strokeWidth={2}
-										d="M12 4v16m8-8H4"
-									/>
-								</svg>
-								<span className="truncate">New Questionnaire</span>
-							</button>
-						</>
-					)}
-				</div>
-
-				<div className="border-b border-base-300 mb-4" />
-
 				{/* TEMPLATE LIBRARY section */}
 				<SectionHeading className="mb-3">Template Library</SectionHeading>
 				{tree.length === 0 ? (

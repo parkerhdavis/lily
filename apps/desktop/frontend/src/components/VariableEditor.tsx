@@ -38,11 +38,8 @@ export default function VariableEditor() {
 		updateVariable,
 		renameDocument,
 		saveDocument,
-		saveClientVariable,
-		setContactBinding,
 		setRoleOverride,
 		returnToHub,
-		openQuestionnaire,
 	} = useWorkflowStore();
 	const autosave = useSettingsStore((s) => s.settings.autosave) !== false;
 	const templatesDir = useSettingsStore((s) => s.settings.templates_dir);
@@ -715,44 +712,6 @@ export default function VariableEditor() {
 												onManualChange={(varName, value) => {
 													handleVariableChange(varName, value);
 												}}
-												onApplyToQuestionnaire={async () => {
-													const overrideValues: Record<string, string> = {};
-													for (const p of group.properties) {
-														overrideValues[p.displayName] =
-															variableValues[p.displayName] ?? "";
-													}
-													const overrideData = roleOverrides[group.role];
-													if (overrideData?.contact_id) {
-														await setContactBinding(group.role, {
-															contact_id: overrideData.contact_id,
-															variable_mappings:
-																lilyFile?.contact_bindings?.[group.role]
-																	?.variable_mappings ??
-																Object.fromEntries(
-																	group.properties.map((p) => [
-																		p.displayName,
-																		p.property,
-																	]),
-																),
-														});
-													}
-													for (const p of group.properties) {
-														await saveClientVariable(
-															p.displayName,
-															overrideValues[p.displayName],
-														);
-													}
-													await setRoleOverride(group.role, null);
-													const { lilyFile: updatedLily } =
-														useWorkflowStore.getState();
-													const savedVars = updatedLily?.variables ?? {};
-													for (const p of group.properties) {
-														handleVariableChange(
-															p.displayName,
-															savedVars[p.displayName] ?? "",
-														);
-													}
-												}}
 												onSelect={(varName) => setSelectedVariable(varName)}
 												scrollToOccurrence={scrollToOccurrence}
 											/>
@@ -807,7 +766,6 @@ export default function VariableEditor() {
 												}}
 												onChange={(value) => handleVariableChange(name, value)}
 												onSelect={() => setSelectedVariable(name)}
-												onOpenQuestionnaire={openQuestionnaire}
 												scrollToOccurrence={scrollToOccurrence}
 											/>
 										);
@@ -887,16 +845,7 @@ export default function VariableEditor() {
 											className={`w-full rounded-lg border bg-base-100 shadow-[0_4px_16px_rgba(0,0,0,0.25)] ${selectedVariable === name ? "ring-2 ring-warning border-warning" : isMalformed ? "border-warning/50" : "border-base-300"}`}
 										>
 											<div className="flex items-center justify-between px-3 py-2 bg-base-200/60 border-b border-base-300 rounded-t-lg">
-												<button
-													type="button"
-													className="text-sm font-bold flex items-center gap-1.5 hover:text-primary transition-colors cursor-pointer"
-													onClick={() => openQuestionnaire()}
-													title={
-														isMalformed
-															? "Possible malformed conditional — check ?? and :: syntax in template"
-															: "Open in questionnaire"
-													}
-												>
+												<div className="text-sm font-bold flex items-center gap-1.5">
 													<StatusDot filled={isFilled} />
 													{name}
 													{isMalformed && (
@@ -907,7 +856,7 @@ export default function VariableEditor() {
 															!
 														</span>
 													)}
-												</button>
+												</div>
 												<div className="join">
 													<button
 														type="button"

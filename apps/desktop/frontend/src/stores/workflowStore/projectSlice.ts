@@ -2,7 +2,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToastStore } from "@/stores/toastStore";
-import { useUndoStore } from "@/stores/undoStore";
 import type { LilyFile } from "@/types";
 import { extractFilename } from "@/utils/path";
 import {
@@ -87,86 +86,6 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 				.getState()
 				.addToast("error", `Failed to update the waiting state: ${err}`);
 		}
-	},
-
-	saveQuestionnaireNote: async (section, noteKind, value) => {
-		const { workingDir } = get();
-		if (!workingDir) return;
-
-		const oldValue =
-			get().lilyFile?.questionnaire_notes?.[section]?.[noteKind] ?? "";
-		await invoke("save_questionnaire_note", {
-			workingDir,
-			section,
-			noteKind,
-			value,
-		});
-		const { lilyFile } = get();
-		if (lilyFile) {
-			const notes = { ...(lilyFile.questionnaire_notes ?? {}) };
-			const sectionNotes = notes[section] ?? {
-				client: "",
-				internal: "",
-			};
-			notes[section] = { ...sectionNotes, [noteKind]: value };
-			set({
-				lilyFile: { ...lilyFile, questionnaire_notes: notes },
-			});
-		}
-		useUndoStore.getState().push({
-			description: `Change ${noteKind} note for ${section}`,
-			timestamp: Date.now(),
-			redo: async () => {
-				await invoke("save_questionnaire_note", {
-					workingDir,
-					section,
-					noteKind,
-					value,
-				});
-				const { lilyFile: lf } = get();
-				if (lf) {
-					const notes = {
-						...(lf.questionnaire_notes ?? {}),
-					};
-					const sn = notes[section] ?? {
-						client: "",
-						internal: "",
-					};
-					notes[section] = { ...sn, [noteKind]: value };
-					set({
-						lilyFile: {
-							...lf,
-							questionnaire_notes: notes,
-						},
-					});
-				}
-			},
-			undo: async () => {
-				await invoke("save_questionnaire_note", {
-					workingDir,
-					section,
-					noteKind,
-					value: oldValue,
-				});
-				const { lilyFile: lf } = get();
-				if (lf) {
-					const notes = {
-						...(lf.questionnaire_notes ?? {}),
-					};
-					const sn = notes[section] ?? {
-						client: "",
-						internal: "",
-					};
-					notes[section] = { ...sn, [noteKind]: oldValue };
-					set({
-						lilyFile: {
-							...lf,
-							questionnaire_notes: notes,
-						},
-					});
-				}
-			},
-		});
 	},
 
 	restoreNavigationEntry: async (entry) => {

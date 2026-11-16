@@ -50,7 +50,6 @@ export default function ContactRoleField({
 	onToggleOverride,
 	onSelectContact,
 	onManualChange,
-	onApplyToQuestionnaire,
 	onSelect,
 	scrollToOccurrence,
 }: {
@@ -63,11 +62,10 @@ export default function ContactRoleField({
 	onToggleOverride: (overriding: boolean) => Promise<void>;
 	onSelectContact: (contactId: string | null) => Promise<void>;
 	onManualChange: (varName: string, value: string) => void;
-	onApplyToQuestionnaire: () => Promise<void>;
 	onSelect: (varName: string) => void;
 	scrollToOccurrence: (varName: string, direction: "prev" | "next") => void;
 }) {
-	// Questionnaire binding (source of truth when linked)
+	// Client-level binding (source of truth when linked)
 	const qBinding = bindings[group.role];
 	const qContactId = qBinding?.contact_id ?? null;
 	const qContact = contacts.find((c) => c.id === qContactId) ?? null;
@@ -119,35 +117,25 @@ export default function ContactRoleField({
 						type="button"
 						className="flex-1 btn btn-ghost btn-sm rounded-none border-0 gap-1.5 text-base-content/50 border-r border-base-300"
 						onClick={() => onToggleOverride(true)}
-						title="Unlink from the questionnaire so you can set a different value for this document only"
+						title="Unlink from the client value so you can set a different value for this document only"
 					>
 						<LinkIcon className="size-3" />
 						Linked
 					</button>
 				) : (
-					<>
-						<button
-							type="button"
-							className="flex-1 btn btn-sm rounded-none border-0 gap-1.5 btn-warning btn-outline border-r border-base-300"
-							onClick={() => onToggleOverride(false)}
-							title="Re-link this role to the questionnaire value and discard the document-specific override"
-						>
-							<LinkSlashIcon className="size-3" />
-							Unlinked
-						</button>
-						<button
-							type="button"
-							className="flex-1 btn btn-ghost btn-sm rounded-none border-0 gap-1 text-base-content/50 hover:bg-success/10 hover:text-success"
-							onClick={onApplyToQuestionnaire}
-							title="Save this document's current values back to the questionnaire as the new default for all documents, then re-link"
-						>
-							Apply Override
-						</button>
-					</>
+					<button
+						type="button"
+						className="flex-1 btn btn-sm rounded-none border-0 gap-1.5 btn-warning btn-outline border-r border-base-300"
+						onClick={() => onToggleOverride(false)}
+						title="Re-link this role to the client value and discard the document-specific override"
+					>
+						<LinkSlashIcon className="size-3" />
+						Unlinked
+					</button>
 				)}
 			</div>
 
-			{/* ── Linked state: greyed-out, shows questionnaire value ── */}
+			{/* ── Linked state: greyed-out, shows the client value ── */}
 			{!isOverridden && (
 				<div className="p-3">
 					<select

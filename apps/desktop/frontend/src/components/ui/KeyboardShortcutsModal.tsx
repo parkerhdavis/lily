@@ -11,7 +11,7 @@ const shortcuts = [
 	{ keys: "Alt+\u2190", action: "Go back" },
 	{ keys: "Alt+\u2192", action: "Go forward" },
 	{ section: "Search" },
-	{ keys: "Ctrl+F", action: "Search variables / questionnaire" },
+	{ keys: "Ctrl+F", action: "Search variables" },
 	{ section: "View" },
 	{ keys: "Ctrl++", action: "Zoom in" },
 	{ keys: "Ctrl+\u2013", action: "Zoom out" },

@@ -80,7 +80,6 @@ export interface AppSettings {
 	last_step: string | null;
 	attorney_name: string | null;
 	autosave: boolean | null;
-	questionnaires_dir: string | null;
 	client_library_dirs: string[];
 	navigation_history: PersistedNavEntry[];
 	agent_command: string | null;
@@ -91,12 +90,10 @@ export interface AppSettings {
 export type WorkflowStep =
 	| "hub"
 	| "clients"
-	| "questionnaire"
 	| "select-template"
 	| "edit-variables"
 	| "app-settings"
-	| "pipeline"
-	| "questionnaire-editor";
+	| "pipeline";
 
 /** A per-document override for a contact role. */
 export interface RoleOverride {
@@ -153,7 +150,7 @@ export interface DocumentMeta {
 	 *  template is first processed so the variable list survives after
 	 *  placeholders are replaced with real values in the docx. */
 	variable_names: string[];
-	/** Per-document role overrides (roles that diverge from the questionnaire). */
+	/** Per-document role overrides (roles that diverge from the client data). */
 	role_overrides: Record<string, RoleOverride>;
 	/** Per-document variable overrides (variables that diverge from client-level values). */
 	variable_overrides: Record<string, string>;
@@ -385,6 +382,16 @@ export interface QuestionnairePreview {
 	warnings: string[];
 	unknown_fields: string[];
 	missing_fields: string[];
+}
+
+export interface QuestionnaireUpdateReport {
+	preview: QuestionnairePreview;
+	variables_added: string[];
+	variables_changed: string[];
+	contacts_added: number;
+	contacts_updated: number;
+	documents_added: number;
+	documents_updated: number;
 }
 
 export interface CreatedQuestionnaireClient {

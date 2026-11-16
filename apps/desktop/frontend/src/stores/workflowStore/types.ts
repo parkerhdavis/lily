@@ -30,14 +30,12 @@ export interface WorkflowState {
 
 	// Navigation actions
 	setStep: (step: WorkflowStep) => void;
-	openQuestionnaire: () => void;
 	startAddDocument: () => void;
 	returnToHub: () => void;
 	goToHub: () => void;
 	goToSettings: () => void;
 	goToPipeline: () => void;
 	goToClients: () => void;
-	goToQuestionnaireEditor: () => void;
 	reset: () => void;
 
 	// Document actions
@@ -79,11 +77,6 @@ export interface WorkflowState {
 	reloadLilyFile: () => Promise<void>;
 	setWorkflowStage: (stage: WorkflowStage) => Promise<void>;
 	setWorkflowWaitingOn: (waitingOn: WorkflowWaitingOn) => Promise<void>;
-	saveQuestionnaireNote: (
-		section: string,
-		noteKind: "client" | "internal",
-		value: string,
-	) => Promise<void>;
 	restoreNavigationEntry: (entry: NavigationEntry) => Promise<void>;
 }
 

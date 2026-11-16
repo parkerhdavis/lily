@@ -10,14 +10,16 @@ mod migrations;
 mod pdf_questionnaire;
 mod plan;
 mod provenance;
-mod questionnaire;
 mod settings;
 
 use docx_ops::{
     copy_template, get_document_html, load_template_schema, load_template_variables,
     rename_document,
 };
-use pdf_questionnaire::{create_client_from_questionnaire, preview_pdf_questionnaire};
+use pdf_questionnaire::{
+    apply_questionnaire_update, create_client_from_questionnaire, preview_pdf_questionnaire,
+    preview_questionnaire_update,
+};
 use lily_file::{
     add_client_variable, add_contact, add_required_document, attach_signed_document,
     backfill_required_documents,
@@ -25,17 +27,13 @@ use lily_file::{
     delete_contact, delete_document, check_document_consistency, detect_document_statuses,
     ensure_required_document, export_client_data, export_client_archive, import_client_data,
     list_clients_in_library,
-    apply_variable_migration, create_lily_file, has_lily_file,
+    create_lily_file, has_lily_file,
     list_library_tree, load_client_summaries, load_lily_file_cmd, new_version_document,
     open_file_in_os, remove_client_variable, remove_required_document, resolve_contact_variables,
-    save_client_variables, save_contact_bindings, save_questionnaire_note, save_variables,
-    set_client_questionnaire, set_document_variables, set_role_override, set_variable_overrides,
+    save_client_variables, save_contact_bindings, save_variables,
+    set_document_variables, set_role_override, set_variable_overrides,
     set_workflow_stage, set_workflow_waiting_on, update_contact, update_required_document_notes,
     update_required_document_status,
-};
-use questionnaire::{
-    create_questionnaire, delete_questionnaire, duplicate_questionnaire, load_questionnaire,
-    load_questionnaire_index, migrate_questionnaires, save_questionnaire,
 };
 use plan::{
     approve_plan_candidate, audit_plan_document, discard_plan_candidate, render_plan_candidate,
@@ -137,6 +135,8 @@ fn main() {
             list_templates,
             preview_pdf_questionnaire,
             create_client_from_questionnaire,
+            preview_questionnaire_update,
+            apply_questionnaire_update,
             list_reference_documents,
             render_plan_document,
             render_plan_candidate,
@@ -163,19 +163,10 @@ fn main() {
             delete_contact,
             save_contact_bindings,
             resolve_contact_variables,
-            save_questionnaire_note,
             set_role_override,
-            set_client_questionnaire,
             export_client_data,
             export_client_archive,
             import_client_data,
-            load_questionnaire_index,
-            load_questionnaire,
-            save_questionnaire,
-            create_questionnaire,
-            duplicate_questionnaire,
-            delete_questionnaire,
-            migrate_questionnaires,
             add_required_document,
             attach_signed_document,
             backfill_required_documents,
@@ -193,7 +184,6 @@ fn main() {
             check_document_consistency,
             has_lily_file,
             create_lily_file,
-            apply_variable_migration,
             copy_from_spouse_lily,
         ])
         .run(tauri::generate_context!())

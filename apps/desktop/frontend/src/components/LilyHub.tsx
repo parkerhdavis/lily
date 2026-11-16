@@ -11,20 +11,13 @@ import type { ClientSummary, PersistedNavEntry } from "@/types";
 import { extractFolderName } from "@/utils/path";
 
 /** Steps that operate on an individual client (require a working dir). */
-const CLIENT_STEPS = new Set([
-	"clients",
-	"questionnaire",
-	"select-template",
-	"edit-variables",
-]);
+const CLIENT_STEPS = new Set(["clients", "select-template", "edit-variables"]);
 
 function describeLastStep(step: string, dirName: string | null): string {
 	if (step === "clients") return "Clients";
 	if (CLIENT_STEPS.has(step) && dirName) return dirName;
 	if (step === "pipeline") return "Pipeline";
 	if (step === "app-settings") return "Settings";
-	if (step === "questionnaire-editor")
-		return "Pipeline \u203A Questionnaire Editor";
 	return "";
 }
 
@@ -102,8 +95,6 @@ export default function LilyHub() {
 			goToPipeline();
 		} else if (last_step === "app-settings") {
 			goToSettings();
-		} else if (last_step === "questionnaire-editor") {
-			goToPipeline();
 		}
 	};
 
@@ -116,8 +107,6 @@ export default function LilyHub() {
 			goToPipeline();
 		} else if (entry.step === "app-settings") {
 			goToSettings();
-		} else if (entry.step === "questionnaire-editor") {
-			goToPipeline();
 		}
 	};
 

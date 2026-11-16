@@ -84,17 +84,13 @@ function suggestedStage(
 
 export default function ClientWorkflow({
 	lilyFile,
-	questionnaireStats,
 	templatesDir,
-	onOpenQuestionnaire,
 	onStartAddDocument,
 	onOpenDocument,
 	onAddMultipleDocuments,
 }: {
 	lilyFile: LilyFile;
-	questionnaireStats: { total: number; filled: number };
 	templatesDir: string | null;
-	onOpenQuestionnaire: () => void;
 	onStartAddDocument: () => void;
 	onOpenDocument: (filename: string, templateRelPath: string) => void;
 	onAddMultipleDocuments: (
@@ -202,9 +198,7 @@ export default function ClientWorkflow({
 	const engagement = required.find(
 		(document) => document.template_rel_path === ENGAGEMENT_LETTER,
 	);
-	const questionnaireComplete =
-		questionnaireStats.total > 0 &&
-		questionnaireStats.filled >= questionnaireStats.total;
+	const questionnaireComplete = Boolean(lilyFile.questionnaire_pdf);
 	const suggested = suggestedStage(required, questionnaireComplete, engagement);
 
 	const next = useMemo(() => {
@@ -212,18 +206,18 @@ export default function ClientWorkflow({
 			return {
 				label: "Select documents",
 				description:
-					"Choose the documents this engagement needs so the questionnaire and letter can be scoped.",
+					"Choose the documents this engagement needs so the questionnaire PDF and letter can be scoped.",
 				action: openSelection,
 				disabled: false,
 			};
 		}
 		if (!questionnaireComplete) {
 			return {
-				label: "Open questionnaire",
+				label: "Questionnaire PDF needed",
 				description:
-					"The questionnaire is scoped to the selected documents. Complete it before the engagement letter.",
-				action: onOpenQuestionnaire,
-				disabled: false,
+					"Attach the filled questionnaire PDF from the card above before the engagement letter.",
+				action: undefined,
+				disabled: true,
 			};
 		}
 		if (!engagement) {
@@ -258,7 +252,7 @@ export default function ClientWorkflow({
 			return {
 				label: "Draft next document",
 				description:
-					"Draft the selected documents from the questionnaire and plan library.",
+					"Draft the selected documents from the client data and plan library.",
 				action: () => {
 					if (templatesDir) {
 						void onAddMultipleDocuments(
@@ -308,7 +302,6 @@ export default function ClientWorkflow({
 		attachSigned,
 		openSelection,
 		onStartAddDocument,
-		onOpenQuestionnaire,
 		onAddMultipleDocuments,
 		onOpenDocument,
 	]);
@@ -483,8 +476,8 @@ export default function ClientWorkflow({
 				<div className="modal-box max-w-2xl">
 					<h3 className="text-lg font-semibold">Select documents</h3>
 					<p className="mt-1 text-xs text-base-content/60">
-						The selection scopes the questionnaire, the engagement letter, and
-						the drafting queue. Documents already drafted stay in the plan.
+						The selection scopes the questionnaire PDF, the engagement letter,
+						and the drafting queue. Documents already drafted stay in the plan.
 					</p>
 					<div className="mt-3 max-h-[60vh] space-y-3 overflow-auto">
 						{templateGroups.length === 0 && (

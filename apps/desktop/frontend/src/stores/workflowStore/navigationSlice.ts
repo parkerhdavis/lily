@@ -10,11 +10,6 @@ export const createNavigationSlice: WorkflowSlice = (set, get) => ({
 		set({ step });
 	},
 
-	openQuestionnaire: () => {
-		pushNav(get());
-		set({ step: "questionnaire" });
-	},
-
 	startAddDocument: () => {
 		pushNav(get());
 		set({ step: "select-template" });
@@ -52,11 +47,6 @@ export const createNavigationSlice: WorkflowSlice = (set, get) => ({
 		pushNav(get());
 		set({ step: "pipeline" });
 	},
-	goToQuestionnaireEditor: () => {
-		pushNav(get());
-		set({ step: "questionnaire-editor" });
-	},
-
 	reset: () => {
 		useNavigationStore.getState().clear();
 		useUndoStore.getState().clear();

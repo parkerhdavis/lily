@@ -313,6 +313,39 @@ mod tests {
 	}
 
 	#[test]
+	fn merge_preserves_contact_ids_and_existing_document_state() {
+		let preview = synthetic_preview();
+		let mut lily = build_client_lily(&preview, "Questionnaire.pdf");
+		let jordan = lily
+			.contacts
+			.iter()
+			.find(|contact| contact.full_name == "Jordan Morgan")
+			.expect("jordan")
+			.id
+			.clone();
+		lily.required_documents[0].status = crate::lily_file::DocumentStatus::Reviewing;
+		lily.required_documents[0].document_filename = Some("Drafted.docx".to_string());
+		lily.required_documents[0].id = "existing-document".to_string();
+		let before = lily.required_documents.len();
+		let counts = merge_questionnaire(&mut lily, &preview);
+		assert_eq!(counts.documents_added, 0);
+		assert_eq!(lily.required_documents.len(), before);
+		assert_eq!(lily.required_documents[0].id, "existing-document");
+		assert_eq!(
+			lily.required_documents[0].status,
+			crate::lily_file::DocumentStatus::Reviewing
+		);
+		assert_eq!(
+			lily.required_documents[0].document_filename.as_deref(),
+			Some("Drafted.docx")
+		);
+		assert!(lily
+			.contacts
+			.iter()
+			.any(|contact| contact.id == jordan && contact.full_name == "Jordan Morgan"));
+	}
+
+	#[test]
 	fn builds_a_joint_client_from_a_synthetic_preview() {
 		let mut preview = synthetic_preview();
 		preview.required_document_count =
@@ -1675,4 +1708,219 @@ fn required_document(
 		client_key: client_key.map(str::to_string),
 		draft_ready,
 	}
+}
+
+// ─── Re-import ─────────────────────────────────────────────────────────────
+
+/// A preview of what re-importing would change on an existing client.
+#[derive(Debug, Clone, Serialize)]
+pub struct QuestionnaireUpdateReport {
+	pub preview: QuestionnairePreview,
+	pub variables_added: Vec<String>,
+	pub variables_changed: Vec<String>,
+	pub contacts_added: usize,
+	pub contacts_updated: usize,
+	pub documents_added: usize,
+	pub documents_updated: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct UpdateCounts {
+	variables_added: Vec<String>,
+	variables_changed: Vec<String>,
+	contacts_added: usize,
+	contacts_updated: usize,
+	documents_added: usize,
+	documents_updated: usize,
+}
+
+/// Preview a re-import without writing anything.
+#[tauri::command]
+pub fn preview_questionnaire_update(
+	working_dir: String,
+	pdf_path: String,
+) -> Result<QuestionnaireUpdateReport, String> {
+	let preview = preview_questionnaire(Path::new(&pdf_path))?;
+	let mut lily = crate::lily_file::read_lily_file(&working_dir)?;
+	let counts = merge_questionnaire(&mut lily, &preview);
+	Ok(QuestionnaireUpdateReport {
+		preview,
+		variables_added: counts.variables_added,
+		variables_changed: counts.variables_changed,
+		contacts_added: counts.contacts_added,
+		contacts_updated: counts.contacts_updated,
+		documents_added: counts.documents_added,
+		documents_updated: counts.documents_updated,
+	})
+}
+
+/// Apply the re-import to an existing client.
+#[tauri::command]
+pub fn apply_questionnaire_update(
+	working_dir: String,
+	pdf_path: String,
+) -> Result<QuestionnaireUpdateReport, String> {
+	let preview = preview_questionnaire(Path::new(&pdf_path))?;
+	let mut lily = crate::lily_file::read_lily_file(&working_dir)?;
+	let counts = merge_questionnaire(&mut lily, &preview);
+	let destination = Path::new(&working_dir).join("Questionnaire.pdf");
+	if Path::new(&pdf_path) != destination {
+		if destination.exists() {
+			let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S%.3f");
+			let backup = destination.with_file_name(format!(
+				"Questionnaire.pdf.bak-{}",
+				stamp
+			));
+			std::fs::copy(&destination, backup).map_err(|error| {
+				format!("Failed to back up the previous questionnaire PDF: {}", error)
+			})?;
+		}
+		std::fs::copy(&pdf_path, &destination)
+			.map_err(|error| format!("Failed to store the questionnaire PDF: {}", error))?;
+	}
+	crate::lily_file::write_client_lily(&working_dir, &lily)?;
+	crate::lily_file::resolve_contact_variables(working_dir.clone())?;
+	Ok(QuestionnaireUpdateReport {
+		preview,
+		variables_added: counts.variables_added,
+		variables_changed: counts.variables_changed,
+		contacts_added: counts.contacts_added,
+		contacts_updated: counts.contacts_updated,
+		documents_added: counts.documents_added,
+		documents_updated: counts.documents_updated,
+	})
+}
+
+const MANAGED_VARIABLES: &[&str] = &[
+	"Plan Includes Trust",
+	"Pour-Over Trust Name",
+	"Trust Name",
+	"Estate Distribution Summary",
+	"Distribution Instructions",
+	"Tangible Property Recipient(s)",
+	"Additional HIPAA Releases",
+	"Has Additional HIPAA Releases",
+];
+
+fn merge_questionnaire(lily: &mut LilyFile, preview: &QuestionnairePreview) -> UpdateCounts {
+	let fresh = build_client_lily(preview, "Questionnaire.pdf");
+	let mut counts = UpdateCounts::default();
+
+	// Clear the keys this importer owns so a cleared PDF answer disappears
+	// instead of leaving the previous value behind.
+	for key in MANAGED_VARIABLES {
+		lily.variables.remove(*key);
+	}
+
+	for (key, value) in &fresh.variables {
+		match lily.variables.get(key) {
+			None => {
+				counts.variables_added.push(key.clone());
+				lily.variables.insert(key.clone(), value.clone());
+			}
+			Some(existing) if existing != value => {
+				counts.variables_changed.push(key.clone());
+				lily.variables.insert(key.clone(), value.clone());
+			}
+			Some(_) => {}
+		}
+	}
+
+	let mut id_map: HashMap<String, String> = HashMap::new();
+	for fresh_contact in &fresh.contacts {
+		let existing = lily.contacts.iter_mut().find(|contact| {
+			same_name(&contact.full_name, &fresh_contact.full_name)
+		});
+		if let Some(existing) = existing {
+			id_map.insert(fresh_contact.id.clone(), existing.id.clone());
+			let updated = crate::lily_file::Contact {
+				id: existing.id.clone(),
+				..fresh_contact.clone()
+			};
+			if *existing != updated {
+				counts.contacts_updated += 1;
+				*existing = updated;
+			}
+		} else {
+			id_map.insert(fresh_contact.id.clone(), fresh_contact.id.clone());
+			counts.contacts_added += 1;
+			lily.contacts.push(fresh_contact.clone());
+		}
+	}
+
+	lily.contact_bindings = fresh
+		.contact_bindings
+		.into_iter()
+		.map(|(role, binding)| (role, remap_binding(binding, &id_map)))
+		.collect();
+	lily.client_roles = fresh
+		.client_roles
+		.into_iter()
+		.map(|(client, roles)| {
+			(
+				client,
+				roles
+					.into_iter()
+					.map(|(role, binding)| (role, remap_binding(binding, &id_map)))
+					.collect(),
+			)
+		})
+		.collect();
+	lily.co_client = fresh.co_client;
+	lily.estate = fresh.estate;
+	lily.questionnaire_pdf = fresh.questionnaire_pdf;
+
+	for fresh_document in fresh.required_documents {
+		let existing = lily.required_documents.iter_mut().find(|document| {
+			document.template_rel_path == fresh_document.template_rel_path
+				&& document.client_key == fresh_document.client_key
+		});
+		if let Some(existing) = existing {
+			let mut changed = false;
+			if existing.proposed_filename != fresh_document.proposed_filename {
+				existing.proposed_filename = fresh_document.proposed_filename;
+				changed = true;
+			}
+			if existing.draft_ready != fresh_document.draft_ready {
+				existing.draft_ready = fresh_document.draft_ready;
+				changed = true;
+			}
+			if changed {
+				counts.documents_updated += 1;
+			}
+		} else {
+			counts.documents_added += 1;
+			lily.required_documents.push(fresh_document);
+		}
+	}
+
+	counts
+}
+
+fn remap_binding(
+	mut binding: crate::lily_file::ContactBinding,
+	ids: &HashMap<String, String>,
+) -> crate::lily_file::ContactBinding {
+	if let Some(id) = &binding.contact_id {
+		if let Some(mapped) = ids.get(id) {
+			binding.contact_id = Some(mapped.clone());
+		}
+	}
+	if let Some(contact_ids) = &mut binding.contact_ids {
+		for id in contact_ids {
+			if let Some(mapped) = ids.get(id) {
+				*id = mapped.clone();
+			}
+		}
+	}
+	if let Some(assignments) = &mut binding.assignments {
+		for assignment in assignments {
+			for id in &mut assignment.contact_ids {
+				if let Some(mapped) = ids.get(id) {
+					*id = mapped.clone();
+				}
+			}
+		}
+	}
+	binding
 }

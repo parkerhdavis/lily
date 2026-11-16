@@ -8,7 +8,6 @@ import { extractFolderName } from "@/utils/path";
 /** Steps that belong to the client management branch. */
 const CLIENT_STEPS = new Set<WorkflowStep>([
 	"clients",
-	"questionnaire",
 	"select-template",
 	"edit-variables",
 ]);

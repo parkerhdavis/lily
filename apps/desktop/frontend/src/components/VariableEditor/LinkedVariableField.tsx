@@ -49,7 +49,6 @@ export default function LinkedVariableField({
 	onToggleLink,
 	onChange,
 	onSelect,
-	onOpenQuestionnaire,
 	scrollToOccurrence,
 }: {
 	name: string;
@@ -65,7 +64,6 @@ export default function LinkedVariableField({
 	onToggleLink: (linked: boolean) => void;
 	onChange: (value: string) => void;
 	onSelect: () => void;
-	onOpenQuestionnaire: () => void;
 	scrollToOccurrence: (name: string, direction: "prev" | "next") => void;
 }) {
 	const isFilled = isConditional || Boolean(value);
@@ -84,16 +82,7 @@ export default function LinkedVariableField({
 		>
 			{/* Name header */}
 			<div className="flex items-center justify-between px-3 py-2 bg-base-200/60 border-b border-base-300 rounded-t-lg">
-				<button
-					type="button"
-					className="text-sm font-bold flex items-center gap-1.5 hover:text-primary transition-colors cursor-pointer"
-					onClick={onOpenQuestionnaire}
-					title={
-						isMalformed
-							? "Possible malformed conditional — check ?? and :: syntax in template"
-							: "Open in questionnaire"
-					}
-				>
+				<div className="text-sm font-bold flex items-center gap-1.5">
 					{!isConditional && <StatusDot filled={isFilled} />}
 					{name}
 					{isMalformed && (
@@ -104,7 +93,7 @@ export default function LinkedVariableField({
 							!
 						</span>
 					)}
-				</button>
+				</div>
 				<div className="join">
 					<button
 						type="button"
@@ -142,7 +131,7 @@ export default function LinkedVariableField({
 						type="button"
 						className="flex-1 btn btn-sm rounded-none border-0 gap-1.5 btn-warning btn-outline"
 						onClick={() => onToggleLink(true)}
-						title="Re-link to the questionnaire value"
+						title="Re-link to the client value"
 					>
 						<LinkSlashIcon className="size-3" />
 						Unlinked

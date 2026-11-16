@@ -42,7 +42,7 @@ pub fn atomic_write_bytes(path: &Path, content: &[u8]) -> Result<(), String> {
 
 /// A contact associated with a client — a person referenced across documents
 /// (e.g., a family member, agent, or trustee).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Contact {
     pub id: String,
     pub full_name: String,
@@ -779,16 +779,8 @@ pub fn has_lily_file(working_dir: String) -> Result<bool, String> {
 /// picks one from the library), so its id/version are stamped immediately.
 /// Returns the created LilyFile.
 #[tauri::command]
-pub fn create_lily_file(
-    working_dir: String,
-    questionnaire_id: Option<String>,
-    questionnaire_version: Option<u32>,
-) -> Result<LilyFile, String> {
-    let lily = LilyFile {
-        questionnaire_id,
-        questionnaire_version,
-        ..LilyFile::default()
-    };
+pub fn create_lily_file(working_dir: String) -> Result<LilyFile, String> {
+    let lily = LilyFile::default();
     write_lily_file(&working_dir, &lily)?;
     Ok(lily)
 }
@@ -1452,82 +1444,6 @@ pub fn set_variable_overrides(
     write_lily_file(&working_dir, &lily)
 }
 
-/// Save a questionnaire note (client or internal) for a specific section.
-#[tauri::command]
-pub fn save_questionnaire_note(
-    working_dir: String,
-    section: String,
-    note_kind: String,
-    value: String,
-) -> Result<(), String> {
-    let mut lily = read_lily_file(&working_dir)?;
-    let notes = lily
-        .questionnaire_notes
-        .entry(section)
-        .or_default();
-    match note_kind.as_str() {
-        "client" => notes.client = value,
-        "internal" => notes.internal = value,
-        _ => return Err(format!("Invalid note kind: {}", note_kind)),
-    }
-    write_lily_file(&working_dir, &lily)
-}
-
-/// Stamp the questionnaire ID and version into the .lily file for a client.
-#[tauri::command]
-pub fn set_client_questionnaire(
-    working_dir: String,
-    questionnaire_id: String,
-    questionnaire_version: u32,
-) -> Result<(), String> {
-    let mut lily = read_lily_file(&working_dir)?;
-    lily.questionnaire_id = Some(questionnaire_id);
-    lily.questionnaire_version = Some(questionnaire_version);
-    write_lily_file(&working_dir, &lily)
-}
-
-/// A single field mapping for variable migration (old name → new name).
-#[derive(Debug, Deserialize)]
-pub struct FieldMapping {
-    pub from: String,
-    pub to: String,
-}
-
-/// Apply variable migration: copy values from old variable names to new ones,
-/// optionally remove orphaned variables, and bump questionnaire_version.
-/// Returns the updated LilyFile.
-#[tauri::command]
-pub fn apply_variable_migration(
-    working_dir: String,
-    mappings: Vec<FieldMapping>,
-    remove_orphaned: Vec<String>,
-    new_questionnaire_version: u32,
-) -> Result<LilyFile, String> {
-    let mut lily = read_lily_file(&working_dir)?;
-
-    // Apply mappings: copy value from old key to new key
-    for mapping in &mappings {
-        if let Some(value) = lily.variables.get(&mapping.from).cloned() {
-            lily.variables.insert(mapping.to.clone(), value);
-        }
-    }
-
-    // Remove mapped source keys (they've been transferred)
-    for mapping in &mappings {
-        lily.variables.remove(&mapping.from);
-    }
-
-    // Remove orphaned variables the user chose to discard
-    for key in &remove_orphaned {
-        lily.variables.remove(key);
-    }
-
-    // Bump questionnaire version
-    lily.questionnaire_version = Some(new_questionnaire_version);
-
-    write_lily_file(&working_dir, &lily)?;
-    Ok(lily)
-}
 
 /// Export client data as a JSON file to the given path.
 #[tauri::command]
@@ -2012,7 +1928,7 @@ fn summarize_client(directory: &str) -> Option<ClientSummary> {
             })
             .collect(),
         contacts_count: lily.contacts.len(),
-        has_questionnaire: lily.questionnaire_id.is_some(),
+        has_questionnaire: lily.questionnaire_pdf.is_some(),
     })
 }
 
