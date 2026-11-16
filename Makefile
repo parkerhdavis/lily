@@ -1,6 +1,6 @@
 # ─── Lily Makefile ───
 
-.PHONY: help dev dev-frontend down build build-linux build-windows build-macos notarize setup install lint lint-fix format check test typecheck clean version
+.PHONY: help dev dev-frontend down build build-linux build-windows build-macos notarize setup install lint lint-fix format check test typecheck clean version release release-tag release-check release-notes
 
 # ─── OS Detection ───
 # On Windows, uname doesn't exist, so we check for Windows-specific env vars first
@@ -428,43 +428,27 @@ test: ## Run all tests (Bun + Rust)
 endif
 
 # ─── Versioning ───
+# scripts/release.py owns the version files, the commit, and the tag.
+# `version` keeps the old V= shape; `release` is the same command under the
+# name the operation reads as.
 
-ifeq ($(DETECTED_OS),windows)
-version: ## Show or set version (use V=X.Y.Z to set)
+release: ## Bump version and commit (use V=X.Y.Z)
 ifndef V
-	@echo "Current version:"
-	@(Select-String -Path package.json -Pattern '"version": "(.+)"').Matches.Groups[1].Value
+	@echo "Current version: $$(python3 scripts/release.py version)"
 else
-	@echo "Updating version to $(V)..."
-	@(Get-Content $(BACKEND)\Cargo.toml -Raw) -replace '(?m)^version = ".*"', 'version = "$(V)"' | Set-Content $(BACKEND)\Cargo.toml -NoNewline
-	@(Get-Content $(BACKEND)\tauri.conf.json -Raw) -replace '"version": ".*"', '"version": "$(V)"' | Set-Content $(BACKEND)\tauri.conf.json -NoNewline
-	@(Get-Content $(FRONTEND)\package.json -Raw) -replace '"version": ".*"', '"version": "$(V)"' | Set-Content $(FRONTEND)\package.json -NoNewline
-	@(Get-Content package.json -Raw) -replace '"version": ".*"', '"version": "$(V)"' | Set-Content package.json -NoNewline
-	@echo "  -> $(BACKEND)/Cargo.toml"
-	@echo "  -> $(BACKEND)/tauri.conf.json"
-	@echo "  -> $(FRONTEND)/package.json"
-	@echo "  -> package.json"
-	@echo ""
-	@echo "Version updated to $(V)"
+	@python3 scripts/release.py bump $(V)
 endif
-else
-version: ## Show or set version (use V=X.Y.Z to set)
-ifndef V
-	@echo "Current version: $$(grep '^\s*\"version\":' package.json | head -1 | sed 's/.*\"version\": \"\(.*\)\".*/\1/')"
-else
-	@echo "Updating version to $(V)..."
-	@$(SED_INPLACE) 's/^version = ".*"/version = "$(V)"/' $(BACKEND)/Cargo.toml
-	@$(SED_INPLACE) 's/"version": ".*"/"version": "$(V)"/' $(BACKEND)/tauri.conf.json
-	@$(SED_INPLACE) 's/"version": ".*"/"version": "$(V)"/' $(FRONTEND)/package.json
-	@$(SED_INPLACE) 's/"version": ".*"/"version": "$(V)"/' package.json
-	@echo "  -> $(BACKEND)/Cargo.toml"
-	@echo "  -> $(BACKEND)/tauri.conf.json"
-	@echo "  -> $(FRONTEND)/package.json"
-	@echo "  -> package.json"
-	@echo ""
-	@echo "Version updated to $(V)"
-endif
-endif
+
+version: release ## Alias for release
+
+release-tag: ## Tag the merged version on main (use V=X.Y.Z)
+	@python3 scripts/release.py tag $(V)
+
+release-check: ## Verify every version file agrees
+	@python3 scripts/release.py check
+
+release-notes: ## Draft release notes from the previous tag (use V=X.Y.Z)
+	@python3 scripts/release.py notes $(if $(V),--to v$(V),)
 
 # ─── Maintenance ───
 

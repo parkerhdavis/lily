@@ -42,6 +42,12 @@ scripts/lily doctor
 scripts/lily doctor --strict
 ```
 
+## Release
+
+`scripts/release.py` owns the version files. `make release V=X.Y.Z` updates `package.json`, the frontend `package.json`, `Cargo.toml`, `tauri.conf.json`, and the `lily` entry in `Cargo.lock`, then commits `Bump version to X.Y.Z`. After that bump merges, `make release-tag V=X.Y.Z` tags `origin/main` with the annotated version tag. Push the tag to start the release workflow.
+
+`make release-check` fails when the version files disagree, and `make release-notes` drafts Markdown from the previous tag to `HEAD` (or `V=X.Y.Z`). The release workflow in `.forgejo/workflows/release.yml` runs on a `v*` tag, builds Linux, Windows, and macOS bundles, and publishes them to a Forgejo release with the generated notes. The macOS bundle from CI is unsigned; signing and notarization stay a manual Mac step.
+
 ## Environment
 
 - `LILY_RENDER_BIN` overrides the `lily-render` path. The default is `target/debug/lily-render` at the repository root.

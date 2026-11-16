@@ -1,0 +1,136 @@
+name: Release
+
+# Builds the three desktop platforms from a version tag and publishes the
+# artifacts to a Forgejo release. The macOS artifact is deliberately unsigned:
+# signing and notarization stay a manual gate (`make build-macos` then
+# `make notarize` on a Mac with .env), because the certificates and Apple
+# credentials are not repository secrets the runner can be trusted with.
+#
+# The matrix expects runners labeled ubuntu-latest, windows-latest, and
+# macos-latest. A missing runner leaves that build queued; the publish job
+# waits for all three.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+          - platform: windows
+            os: windows-latest
+          - platform: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: https://github.com/dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.93.1
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: apps/desktop/frontend
+        run: bun run build
+
+      - name: Build application
+        working-directory: apps/desktop/backend
+        run: bunx tauri build
+
+      - name: Collect bundles
+        shell: bash
+        run: |
+          mkdir -p dist
+          find target/release/bundle -type f \
+            \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \
+               -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" \) \
+            -exec cp {} dist/ \;
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lily-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Resolve tag
+        id: release
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        run: |
+          python3 scripts/release.py notes \
+            --to "${{ steps.release.outputs.tag }}" \
+            --output release-notes.md
+
+      - name: Publish release
+        env:
+          FORGEJO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/release.py publish \
+            --api "${{ github.server_url }}/api/v1" \
+            --repo "${{ github.repository }}" \
+            --tag "${{ steps.release.outputs.tag }}" \
+            --title "Lily ${{ steps.release.outputs.version }}" \
+            --notes release-notes.md \
+            --assets-dir dist
