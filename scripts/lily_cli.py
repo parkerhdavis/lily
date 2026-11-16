@@ -498,7 +498,7 @@ def condition_variables(condition) -> set[str]:
 	return names
 
 
-def evaluate_condition(condition, variables: dict, lists: dict):
+def evaluate_condition(condition, variables: dict, lists: dict, roles: dict | None = None):
 	if isinstance(condition, bool):
 		return condition
 	if not isinstance(condition, dict):
@@ -530,7 +530,7 @@ def evaluate_condition(condition, variables: dict, lists: dict):
 		return str(needle) in lists.get(name, [])
 	if "and" in condition:
 		results = [
-			evaluate_condition(child, variables, lists)
+			evaluate_condition(child, variables, lists, roles)
 			for child in condition.get("and") or []
 		]
 		if any(result is False for result in results):
@@ -538,18 +538,20 @@ def evaluate_condition(condition, variables: dict, lists: dict):
 		return None if any(result is None for result in results) else True
 	if "or" in condition:
 		results = [
-			evaluate_condition(child, variables, lists)
+			evaluate_condition(child, variables, lists, roles)
 			for child in condition.get("or") or []
 		]
 		if any(result is True for result in results):
 			return True
 		return None if any(result is None for result in results) else False
 	if "not" in condition:
-		result = evaluate_condition(condition["not"], variables, lists)
+		result = evaluate_condition(condition["not"], variables, lists, roles)
 		return None if result is None else not result
 	if isinstance(condition.get("exists"), str):
 		value = lookup_variable(variables, condition["exists"])
 		return bool(value) if value is not None else False
+	if isinstance(condition.get("has_role"), str):
+		return bool((roles or {}).get(condition["has_role"]))
 	return None
 
 
@@ -744,7 +746,9 @@ def audit_plan(plan: dict, variables: dict, lists: dict, roles: dict[str, list[s
 	roles = roles or {}
 	missing_roles = [role for role in references["roles"] if not roles.get(role)]
 	declared = plan.get("slots", {})
+	declared_lookup = {key.lower(): key for key in declared}
 	used = sorted(set(references["slots"]))
+	used_lower = {name.lower() for name in used}
 	condition_names: set[str] = set()
 	for _, condition in references["conditions"]:
 		condition_names |= condition_variables(condition)
@@ -753,7 +757,7 @@ def audit_plan(plan: dict, variables: dict, lists: dict, roles: dict[str, list[s
 		value = lookup_variable(variables, name)
 		if value is not None and str(value) != "":
 			continue
-		declaration = declared.get(name, {})
+		declaration = declared.get(declared_lookup.get(name.lower(), name), {})
 		empty.append(
 			{
 				"name": name,
@@ -780,7 +784,7 @@ def audit_plan(plan: dict, variables: dict, lists: dict, roles: dict[str, list[s
 				"condition": condition,
 				"variables": names,
 				"values": values,
-				"result": evaluate_condition(condition, variables, lists),
+				"result": evaluate_condition(condition, variables, lists, roles),
 			}
 		)
 	return {
@@ -793,8 +797,13 @@ def audit_plan(plan: dict, variables: dict, lists: dict, roles: dict[str, list[s
 		"slots": {
 			"used": used,
 			"declared": sorted(declared),
-			"undeclared": sorted(set(used) - set(declared)),
-			"unused": sorted(set(declared) - set(used) - condition_names),
+			"undeclared": sorted(name for name in used if name.lower() not in declared_lookup),
+			"unused": sorted(
+				key
+				for key in declared
+				if key.lower() not in used_lower
+				and key.lower() not in {name.lower() for name in condition_names}
+			),
 			"empty": empty,
 		},
 		"conditions": conditions,
