@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use chrono::{DateTime, Utc};
+use crate::provenance::DraftProvenance;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -288,6 +289,10 @@ pub struct DocumentMeta {
     /// the document uses this value instead of the client-level value.
     #[serde(default)]
     pub variable_overrides: HashMap<String, String>,
+    /// What produced the current draft: plan, clauses, client-data
+    /// fingerprint, renderer, agent, and approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<DraftProvenance>,
 }
 
 impl Default for LilyFile {
@@ -362,6 +367,27 @@ fn find_lily_files(working_dir: &str) -> Result<Vec<std::path::PathBuf>, String>
 /// Read the `.lily` file from a working directory.
 /// If no `.lily` file exists, checks for a legacy `.lily.json` and migrates it.
 /// Returns a default (empty) LilyFile if neither exists.
+/// Store a draft provenance record on a document's metadata. Missing
+/// document entries are left alone: the render already succeeded, and the
+/// provenance is a record rather than a precondition.
+pub fn set_document_provenance(
+    working_dir: &str,
+    filename: &str,
+    provenance: DraftProvenance,
+) -> Result<(), String> {
+    let mut lily = read_lily_file(working_dir)?;
+    if let Some(meta) = lily.documents.get_mut(filename) {
+        meta.provenance = Some(provenance);
+        write_lily_file(working_dir, &lily)?;
+    } else {
+        tracing::warn!(
+            document = filename,
+            "No .lily document entry for rendered provenance"
+        );
+    }
+    Ok(())
+}
+
 pub fn read_lily_file(working_dir: &str) -> Result<LilyFile, String> {
     info!(working_dir, "Loading .lily file");
     // Check for existing .lily file(s)
@@ -491,6 +517,7 @@ fn migrate_legacy_sidecar(working_dir: &str) -> Result<LilyFile, String> {
                 variable_names,
                 role_overrides: HashMap::new(),
                 variable_overrides: HashMap::new(),
+                provenance: None,
             },
         );
     }
@@ -529,6 +556,7 @@ pub fn record_document(
             variable_names: Vec::new(),
             role_overrides: HashMap::new(),
             variable_overrides: HashMap::new(),
+            provenance: None,
         },
     );
     write_lily_file(working_dir, &lily)
@@ -763,6 +791,7 @@ pub fn new_version_document(working_dir: String, filename: String) -> Result<Str
             variable_names,
             role_overrides: HashMap::new(),
             variable_overrides: HashMap::new(),
+            provenance: None,
         },
     );
     write_lily_file(&working_dir, &lily)?;
@@ -2271,13 +2300,14 @@ fn recreate_document_from_template(
         write_lily_file(target_dir, &tl)?;
     }
 
-    crate::plan::render_plan(
+    let report = crate::plan::render_plan(
         &plan_full,
         Path::new(target_dir),
         &template_full,
         Path::new(&docx_path),
         Some(Path::new(filename)),
     )?;
+    set_document_provenance(target_dir, filename, report.provenance)?;
     Ok(())
 }
 
@@ -2642,6 +2672,7 @@ mod tests {
                 variable_names: vec!["Client Full Name".into()],
                 role_overrides: HashMap::new(),
                 variable_overrides: HashMap::new(),
+                provenance: None,
             },
         );
 

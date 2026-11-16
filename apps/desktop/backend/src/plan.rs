@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
@@ -18,6 +18,10 @@ use zip::{ZipArchive, ZipWriter};
 
 use crate::history::VersionDiffLine;
 use crate::lily_file::{self, Contact, LilyFile, RoleAssignment};
+use crate::provenance::{self, DraftProvenance};
+
+/// Clause IDs and versions that contributed text to a render.
+pub type ClauseUsage = BTreeMap<String, u32>;
 
 static SDT_RE: LazyLock<regex::Regex> =
 	LazyLock::new(|| regex::Regex::new(r"(?s)<w:sdt>.*?</w:sdt>").expect("valid sdt regex"));
@@ -1113,6 +1117,7 @@ fn render_role(
 	output
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_content(
 	nodes: &[ContentNode],
 	plan: &DocumentPlan,
@@ -1121,6 +1126,7 @@ fn render_content(
 	current_block: Option<&str>,
 	formatting: Option<&SourceFormatting>,
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<String, String> {
 	let mut output = String::new();
 	for node in nodes {
@@ -1213,6 +1219,9 @@ fn render_content(
 					None => true,
 				};
 				if use_condition && clause_condition {
+					used
+						.entry(definition.id.clone())
+						.or_insert(definition.version);
 					output.push_str(&render_content(
 						&definition.body,
 						plan,
@@ -1221,6 +1230,7 @@ fn render_content(
 						current_block,
 						formatting,
 						warnings,
+						used,
 					)?);
 				}
 			}
@@ -1298,6 +1308,7 @@ fn render_paragraph(
 	numbers: &HashMap<String, String>,
 	sources: &[SourceFormatting],
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<String, String> {
 	let source_index = block.source_paragraph.or_else(|| {
 		block
@@ -1314,6 +1325,7 @@ fn render_paragraph(
 		Some(&block.id),
 		source,
 		warnings,
+		used,
 	)?;
 	let properties = if let Some(source) = source {
 		if !source.ppr.is_empty() {
@@ -1381,6 +1393,7 @@ fn render_table(
 	data: &DataView,
 	numbers: &HashMap<String, String>,
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<String, String> {
 	let style = if block.style.is_empty() {
 		String::new()
@@ -1402,6 +1415,7 @@ fn render_table(
 				Some(&block.id),
 				None,
 				warnings,
+				used,
 			)?;
 			let properties = if cell.style.is_empty() {
 				String::new()
@@ -1715,6 +1729,7 @@ fn emit_segment_group(rpr: &str, marks: &[String], segments: &[Segment]) -> Stri
 
 /// Resolve a block's content into inline segments. This mirrors the rebuild
 /// path's resolution but produces data instead of XML.
+#[allow(clippy::too_many_arguments)]
 fn resolve_segments(
 	nodes: &[ContentNode],
 	plan: &DocumentPlan,
@@ -1722,6 +1737,7 @@ fn resolve_segments(
 	numbers: &HashMap<String, String>,
 	current_block: Option<&str>,
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<Vec<Segment>, String> {
 	let mut segments = Vec::new();
 	for node in nodes {
@@ -1811,6 +1827,9 @@ fn resolve_segments(
 					None => true,
 				};
 				if use_condition && clause_condition {
+					used
+						.entry(definition.id.clone())
+						.or_insert(definition.version);
 					segments.extend(resolve_segments(
 						&definition.body,
 						plan,
@@ -1818,6 +1837,7 @@ fn resolve_segments(
 						numbers,
 						current_block,
 						warnings,
+						used,
 					)?);
 				}
 			}
@@ -1878,6 +1898,7 @@ fn edit_paragraph(
 	data: &DataView,
 	numbers: &HashMap<String, String>,
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<String, String> {
 	let parsed = parse_paragraph(paragraph_xml);
 	let segments = resolve_segments(
@@ -1887,6 +1908,7 @@ fn edit_paragraph(
 		numbers,
 		Some(&block.id),
 		warnings,
+		used,
 	)?;
 
 	// Flatten the text-bearing runs so each resolved segment can be matched to
@@ -2145,6 +2167,7 @@ fn edit_body(
 	data: &DataView,
 	sources: &[SourceFormatting],
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<Option<(String, usize)>, String> {
 	let Some((prefix, inner, suffix)) = split_body(document_xml) else {
 		return Ok(None);
@@ -2191,6 +2214,7 @@ fn edit_body(
 						data,
 						&numbers,
 						warnings,
+						used,
 					)?;
 					replacements.insert(index, Some(edited));
 					count += 1;
@@ -2204,7 +2228,7 @@ fn edit_body(
 				resolved += 1;
 				if block_enabled {
 					let rendered =
-						render_block(block, plan, data, &numbers, sources, warnings)?;
+						render_block(block, plan, data, &numbers, sources, warnings, used)?;
 					replacements.insert(index, Some(rendered));
 					count += 1;
 				} else {
@@ -2218,7 +2242,7 @@ fn edit_body(
 					formatted.source_paragraph = last_source_ordinal;
 				}
 				let rendered =
-					render_block(&formatted, plan, data, &numbers, sources, warnings)?;
+					render_block(&formatted, plan, data, &numbers, sources, warnings, used)?;
 				match last_source {
 					Some(index) => insertions.entry(index).or_default().push(rendered),
 					None => before_first.push(rendered),
@@ -2261,13 +2285,14 @@ fn render_block(
 	numbers: &HashMap<String, String>,
 	sources: &[SourceFormatting],
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<String, String> {
 	match block.kind.as_str() {
 		"paragraph" | "heading" => {
-			render_paragraph(block, plan, data, numbers, sources, warnings)
+			render_paragraph(block, plan, data, numbers, sources, warnings, used)
 		}
-		"table" => render_table(block, plan, data, numbers, warnings),
-		"excerpt" => render_excerpt(block, plan, data, warnings),
+		"table" => render_table(block, plan, data, numbers, warnings, used),
+		"excerpt" => render_excerpt(block, plan, data, warnings, used),
 		"page-break" => Ok("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>".to_string()),
 		other => Err(format!(
 			"Unsupported block kind '{}' in block '{}'",
@@ -2298,6 +2323,7 @@ fn render_excerpt(
 	plan: &DocumentPlan,
 	data: &DataView,
 	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<String, String> {
 	let Some(path) = &block.path else {
 		return Err(format!("Excerpt block '{}' has no path", block.id));
@@ -2326,7 +2352,7 @@ fn render_excerpt(
 	} else {
 		load_skeleton_sources(&excerpt.base_dir.join(&excerpt.layout))?
 	};
-	let (body, _) = render_body(&excerpt, data, &sources, warnings)?;
+	let (body, _) = render_body_traced(&excerpt, data, &sources, warnings, used)?;
 	Ok(body)
 }
 
@@ -2404,11 +2430,24 @@ fn with_list_separator(
 }
 
 /// Render the plan's blocks to WordprocessingML body content.
+#[cfg(test)]
 pub fn render_body(
 	plan: &DocumentPlan,
 	data: &DataView,
 	sources: &[SourceFormatting],
 	warnings: &mut Vec<String>,
+) -> Result<(String, usize), String> {
+	let mut used = ClauseUsage::new();
+	render_body_traced(plan, data, sources, warnings, &mut used)
+}
+
+/// Render the plan's blocks while recording the clauses that contributed.
+fn render_body_traced(
+	plan: &DocumentPlan,
+	data: &DataView,
+	sources: &[SourceFormatting],
+	warnings: &mut Vec<String>,
+	used: &mut ClauseUsage,
 ) -> Result<(String, usize), String> {
 	let numbers = assign_numbers(plan, data)?;
 	let enabled = evaluate_block_conditions(plan, data)?;
@@ -2419,7 +2458,9 @@ pub fn render_body(
 			continue;
 		}
 		let effective = with_list_separator(block, plan, &enabled);
-		body.push_str(&render_block(&effective, plan, data, &numbers, sources, warnings)?);
+		body.push_str(&render_block(
+			&effective, plan, data, &numbers, sources, warnings, used,
+		)?);
 		count += 1;
 	}
 	Ok((body, count))
@@ -2492,6 +2533,7 @@ pub struct RenderReport {
 	pub output: String,
 	pub blocks_rendered: usize,
 	pub warnings: Vec<String>,
+	pub provenance: DraftProvenance,
 }
 
 /// Render a plan over the document copy in place. The document is both the
@@ -2837,7 +2879,17 @@ pub fn render_plan_document(
 		.map(PathBuf::from)
 		.or_else(|| resolve_plan_skeleton(plan_file))
 		.unwrap_or_else(|| path.to_path_buf());
-	render_plan(plan_file, client_dir, &skeleton, path, Some(path))
+	let report = render_plan(plan_file, client_dir, &skeleton, path, Some(path))?;
+	if let Some(filename) = path.file_name().and_then(|name| name.to_str()) {
+		if let Err(error) = lily_file::set_document_provenance(
+			&client_dir.to_string_lossy(),
+			filename,
+			report.provenance.clone(),
+		) {
+			tracing::warn!(%error, document = filename, "Failed to record draft provenance");
+		}
+	}
+	Ok(report)
 }
 
 /// Resolve the pristine template a plan was compiled from. The app normally
@@ -2899,6 +2951,7 @@ pub fn render_plan(
 
 	let skeleton_bytes = fs::read(skeleton_path)
 		.map_err(|error| format!("Failed to read skeleton {}: {}", skeleton_path.display(), error))?;
+	let template_hash = provenance::sha256_hex(&skeleton_bytes);
 	let (document_xml, sources) = {
 		let mut source_archive = ZipArchive::new(Cursor::new(&skeleton_bytes))
 			.map_err(|error| format!("Failed to open skeleton as a docx: {}", error))?;
@@ -2913,11 +2966,20 @@ pub fn render_plan(
 	};
 
 	let mut warnings = Vec::new();
-	let edited = edit_body(&document_xml, &plan, &view, &sources, &mut warnings)?;
+	let mut used = ClauseUsage::new();
+	let edited = edit_body(
+		&document_xml,
+		&plan,
+		&view,
+		&sources,
+		&mut warnings,
+		&mut used,
+	)?;
 	let (body_xml, blocks_rendered, edited_document) = match edited {
 		Some((document, count)) => (String::new(), count, Some(document)),
 		None => {
-			let (body, count) = render_body(&plan, &view, &sources, &mut warnings)?;
+			let (body, count) =
+				render_body_traced(&plan, &view, &sources, &mut warnings, &mut used)?;
 			(body, count, None)
 		}
 	};
@@ -2978,8 +3040,22 @@ pub fn render_plan(
 		fs::create_dir_all(parent)
 			.map_err(|error| format!("Failed to create output directory: {}", error))?;
 	}
-	fs::write(output_path, output.into_inner())
+	let output_bytes = output.into_inner();
+	fs::write(output_path, &output_bytes)
 		.map_err(|error| format!("Failed to write rendered document: {}", error))?;
+
+	let provenance = DraftProvenance {
+		generated_at: chrono::Utc::now(),
+		plan_id: plan.id.clone(),
+		plan_version: plan.version,
+		renderer_version: provenance::RENDERER_VERSION.to_string(),
+		clauses: used,
+		client_data_hash: provenance::client_data_hash(&lily, document_name.as_deref()),
+		template_hash: Some(template_hash),
+		document_hash: Some(provenance::sha256_hex(&output_bytes)),
+		agent: None,
+		approval: None,
+	};
 
 	Ok(RenderReport {
 		plan_id: plan.id,
@@ -2987,6 +3063,7 @@ pub fn render_plan(
 		output: output_path.to_string_lossy().to_string(),
 		blocks_rendered,
 		warnings,
+		provenance,
 	})
 }
 
@@ -3013,6 +3090,7 @@ pub struct PlanCandidateReport {
 	pub summary: String,
 	#[serde(default)]
 	pub proposal_path: String,
+	pub provenance: DraftProvenance,
 }
 
 fn candidate_output_path(docx: &Path) -> PathBuf {
@@ -3065,6 +3143,9 @@ pub fn render_plan_candidate(
 	.inspect_err(|_| {
 		let _ = fs::remove_file(&candidate);
 	})?;
+	provenance::write_candidate_provenance(&candidate, &report.provenance).inspect_err(|_| {
+		let _ = fs::remove_file(&candidate);
+	})?;
 	let candidate_html =
 		crate::docx_ops::get_document_html(candidate.to_string_lossy().to_string()).inspect_err(
 			|_| {
@@ -3085,24 +3166,42 @@ pub fn render_plan_candidate(
 		flags: Vec::new(),
 		summary: String::new(),
 		proposal_path: String::new(),
+		provenance: report.provenance,
 	})
 }
 
 /// Replace the client's document with an approved candidate. The current
 /// document is snapshotted first and the temporary candidate is removed.
 #[tauri::command]
-pub fn approve_plan_candidate(docx_path: String, candidate_path: String) -> Result<(), String> {
+pub fn approve_plan_candidate(
+	docx_path: String,
+	candidate_path: String,
+	approved_by: Option<String>,
+) -> Result<(), String> {
 	let docx = Path::new(&docx_path);
 	let candidate = Path::new(&candidate_path);
 	ensure_candidate(candidate)?;
 	if !candidate.is_file() {
 		return Err(format!("Candidate not found: {}", candidate.display()));
 	}
+	let record = provenance::read_candidate_provenance(candidate);
 	crate::history::snapshot_document_path(&docx_path)?;
 	let bytes = fs::read(candidate)
 		.map_err(|error| format!("Failed to read candidate {}: {}", candidate.display(), error))?;
 	fs::write(docx, bytes)
 		.map_err(|error| format!("Failed to write document {}: {}", docx.display(), error))?;
+	if let Some(mut record) = record {
+		record.approve(approved_by);
+		if let (Some(parent), Some(filename)) = (
+			docx.parent().and_then(|path| path.to_str()),
+			docx.file_name().and_then(|name| name.to_str()),
+		) {
+			if let Err(error) = lily_file::set_document_provenance(parent, filename, record) {
+				tracing::warn!(%error, document = filename, "Failed to record draft approval");
+			}
+		}
+	}
+	provenance::remove_candidate_provenance(candidate);
 	let _ = fs::remove_file(candidate);
 	Ok(())
 }
@@ -3120,6 +3219,7 @@ pub fn discard_plan_candidate(candidate_path: String) -> Result<(), String> {
 			)
 		})?;
 	}
+	provenance::remove_candidate_provenance(candidate);
 	if let Some(parent) = candidate.parent() {
 		if parent
 			.file_name()
@@ -3450,6 +3550,7 @@ mod tests {
 			&view(),
 			&HashMap::new(),
 			&mut warnings,
+			&mut ClauseUsage::new(),
 		)
 		.expect("edited paragraph");
 		assert!(result.contains("Jane A. Doe"));
@@ -4065,7 +4166,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let (edited, count) =
-			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings)
+			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		assert_eq!(count, 1);
@@ -4111,7 +4212,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let (edited, _) =
-			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings)
+			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		assert!(edited.contains("Jane A. Doe"));
@@ -4156,7 +4257,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let (edited, count) =
-			edit_body(document, &test_plan(vec![keep, remove]), &view(), &[], &mut warnings)
+			edit_body(document, &test_plan(vec![keep, remove]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		assert_eq!(count, 1);
@@ -4201,7 +4302,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let (edited, count) =
-			edit_body(document, &test_plan(vec![first, extra]), &view(), &[], &mut warnings)
+			edit_body(document, &test_plan(vec![first, extra]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		assert_eq!(count, 2);
@@ -4246,7 +4347,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let (edited, _) =
-			edit_body(document, &test_plan(vec![empty, text]), &view(), &[], &mut warnings)
+			edit_body(document, &test_plan(vec![empty, text]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		assert!(!edited.contains("/></w:p>"), "self-closing paragraph left a stray close: {edited}");
@@ -4275,7 +4376,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let result =
-			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings).unwrap();
+			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings, &mut ClauseUsage::new()).unwrap();
 		assert!(result.is_none(), "unmatched plans must use the rebuild path");
 		assert!(warnings.is_empty());
 	}
@@ -4300,7 +4401,7 @@ mod tests {
 		};
 		let mut warnings = Vec::new();
 		let (edited, _) =
-			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings)
+			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		let underlined = edited
@@ -4353,7 +4454,7 @@ mod tests {
 			rpr: "<w:rPr><w:rFonts w:ascii=\"Times New Roman\"/></w:rPr>".to_string(),
 		}];
 		let (edited, _) =
-			edit_body(document, &test_plan(vec![first, inserted]), &view(), &sources, &mut warnings)
+			edit_body(document, &test_plan(vec![first, inserted]), &view(), &sources, &mut warnings, &mut ClauseUsage::new())
 				.unwrap()
 				.expect("body is editable");
 		let position = edited.find("Inserted").expect("inserted text");
@@ -4651,6 +4752,110 @@ mod tests {
 			.iter()
 			.any(|line| line.kind == "added" && line.text == "Hello Jane Doe"));
 		discard_plan_candidate(report.candidate_path).expect("discard");
+		fs::remove_dir_all(&directory).ok();
+	}
+
+	#[test]
+	fn candidate_records_and_approves_provenance() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("lily-provenance-test-{}", unique));
+		let client_dir = directory.join("client");
+		fs::create_dir_all(&client_dir).expect("client directory");
+		fs::write(
+			client_dir.join("Client.lily"),
+			r#"{"lily_type":"client","lily_version":5,"variables":{"Client Full Name":"Jane Doe"},"documents":{"Will.docx":{"template_rel_path":"Will.docx","created_at":"2026-01-01T00:00:00Z","modified_at":"2026-01-01T00:00:00Z"}},"contacts":[],"contact_bindings":{}}"#,
+		)
+		.expect("client file");
+		let skeleton = directory.join("skeleton.docx");
+		write_minimal_docx(&skeleton, "Old text");
+		let document = client_dir.join("Will.docx");
+		fs::copy(&skeleton, &document).expect("document copy");
+		let plan_path = directory.join("plan.json");
+		fs::write(
+			&plan_path,
+			r#"{"lily_type":"document-plan","id":"provenance-test","version":3,"layout":"skeleton.docx","clauses":{"greeting":{"id":"greeting","version":2,"body":[{"text":"Hello "},{"slot":"Client Full Name"}]}},"slots":{"Client Full Name":{"type":"text"}},"blocks":[{"id":"block-000","kind":"paragraph","style":"Normal","content":[{"clause":"greeting"}]}]}"#,
+		)
+		.expect("plan file");
+
+		let report = render_plan_candidate(
+			document.to_string_lossy().to_string(),
+			plan_path.to_string_lossy().to_string(),
+			skeleton.to_string_lossy().to_string(),
+		)
+		.expect("candidate");
+		assert_eq!(report.provenance.plan_id, "provenance-test");
+		assert_eq!(report.provenance.plan_version, 3);
+		assert_eq!(report.provenance.clauses.get("greeting"), Some(&2));
+		assert_eq!(report.provenance.client_data_hash.len(), 64);
+		assert!(report.provenance.template_hash.is_some());
+		assert!(report.provenance.document_hash.is_some());
+		assert!(report.provenance.approval.is_none());
+
+		approve_plan_candidate(
+			document.to_string_lossy().to_string(),
+			report.candidate_path.clone(),
+			Some("JANE ATTORNEY".to_string()),
+		)
+		.expect("approve");
+		let lily = lily_file::read_lily_file(&client_dir.to_string_lossy()).expect("lily");
+		let record = lily
+			.documents
+			.get("Will.docx")
+			.and_then(|meta| meta.provenance.as_ref())
+			.expect("provenance recorded");
+		assert_eq!(record.plan_id, "provenance-test");
+		let approval = record.approval.as_ref().expect("approval");
+		assert_eq!(approval.method, "plan-candidate");
+		assert_eq!(approval.approved_by.as_deref(), Some("JANE ATTORNEY"));
+		assert!(!Path::new(&format!("{}.provenance.json", report.candidate_path)).exists());
+		fs::remove_dir_all(&directory).ok();
+	}
+
+	#[test]
+	fn render_document_records_provenance() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("lily-render-record-{}", unique));
+		let client_dir = directory.join("client");
+		fs::create_dir_all(&client_dir).expect("client directory");
+		fs::write(
+			client_dir.join("Client.lily"),
+			r#"{"lily_type":"client","lily_version":5,"variables":{"Client Full Name":"Jane Doe"},"documents":{"Will.docx":{"template_rel_path":"Will.docx","created_at":"2026-01-01T00:00:00Z","modified_at":"2026-01-01T00:00:00Z"}},"contacts":[],"contact_bindings":{}}"#,
+		)
+		.expect("client file");
+		let skeleton = directory.join("skeleton.docx");
+		write_minimal_docx(&skeleton, "Old text");
+		let document = client_dir.join("Will.docx");
+		fs::copy(&skeleton, &document).expect("document copy");
+		let plan_path = directory.join("plan.json");
+		fs::write(
+			&plan_path,
+			r#"{"lily_type":"document-plan","id":"render-record","version":4,"layout":"skeleton.docx","blocks":[{"id":"block-000","kind":"paragraph","style":"Normal","content":[{"text":"Hello "},{"slot":"Client Full Name"}]}]}"#,
+		)
+		.expect("plan file");
+
+		render_plan_document(
+			document.to_string_lossy().to_string(),
+			plan_path.to_string_lossy().to_string(),
+			Some(skeleton.to_string_lossy().to_string()),
+		)
+		.expect("render");
+
+		let lily = lily_file::read_lily_file(&client_dir.to_string_lossy()).expect("lily");
+		let record = lily
+			.documents
+			.get("Will.docx")
+			.and_then(|meta| meta.provenance.as_ref())
+			.expect("provenance recorded");
+		assert_eq!(record.plan_id, "render-record");
+		assert_eq!(record.plan_version, 4);
+		assert!(record.approval.is_none());
+		assert_eq!(record.client_data_hash.len(), 64);
 		fs::remove_dir_all(&directory).ok();
 	}
 

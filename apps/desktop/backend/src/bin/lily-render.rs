@@ -20,6 +20,9 @@ mod lily_file;
 #[path = "../plan.rs"]
 mod plan;
 
+#[path = "../provenance.rs"]
+mod provenance;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 

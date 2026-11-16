@@ -7,6 +7,7 @@ mod docx_ops;
 mod history;
 mod lily_file;
 mod plan;
+mod provenance;
 mod questionnaire;
 mod settings;
 

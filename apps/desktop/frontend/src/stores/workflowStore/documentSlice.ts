@@ -155,10 +155,6 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 			// conditionals pick up values immediately.
 			await resolveContactVariables(workingDir);
 
-			// Reload once at the end
-			const updatedLilyFile = await invoke<LilyFile>("load_lily_file_cmd", {
-				workingDir,
-			});
 			for (const { docPath, templateRelPath } of addedDocs) {
 				let templateSchema: VariableSchema | null = null;
 				try {
@@ -180,9 +176,15 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 				);
 			}
 
+			// Rendering writes the draft record, so reload before the hub
+			// reads the updated document metadata.
+			const renderedLilyFile = await invoke<LilyFile>("load_lily_file_cmd", {
+				workingDir,
+			});
+
 			pushNav(get());
 			set({
-				lilyFile: updatedLilyFile,
+				lilyFile: renderedLilyFile,
 				step: "clients",
 				loading: false,
 			});
@@ -294,6 +296,11 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 			const documentHtml = await invoke<string>("get_document_html", {
 				docxPath: docPath,
 			});
+			// Rendering writes the draft record, so reload the metadata the
+			// editor shows alongside the document.
+			const renderedLilyFile = await invoke<LilyFile>("load_lily_file_cmd", {
+				workingDir,
+			});
 
 			pushNav(get());
 			set({
@@ -302,7 +309,7 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 				variables,
 				variableValues,
 				documentHtml,
-				lilyFile: updatedLilyFile,
+				lilyFile: renderedLilyFile,
 				templateSchema,
 				dirty: false,
 				step: "edit-variables",

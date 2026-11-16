@@ -30,6 +30,7 @@ export default function DraftCandidate({
 	const variableValues = useWorkflowStore((state) => state.variableValues);
 	const dirty = useWorkflowStore((state) => state.dirty);
 	const refreshPreview = useWorkflowStore((state) => state.refreshPreview);
+	const reloadLilyFile = useWorkflowStore((state) => state.reloadLilyFile);
 	const settings = useSettingsStore((state) => state.settings);
 
 	const render = useCallback(async () => {
@@ -133,14 +134,17 @@ export default function DraftCandidate({
 					candidatePath: candidate.candidate_path,
 					clientDir: workingDir,
 					proposalPath: candidate.proposal_path,
+					approvedBy: settings.attorney_name ?? null,
 				});
 			} else {
 				await invoke("approve_plan_candidate", {
 					docxPath: documentPath,
 					candidatePath: candidate.candidate_path,
+					approvedBy: settings.attorney_name ?? null,
 				});
 			}
 			await refreshPreview();
+			await reloadLilyFile();
 			useWorkflowStore.setState({ dirty: false });
 			setCandidate(null);
 			dialogRef.current?.close();
@@ -149,7 +153,14 @@ export default function DraftCandidate({
 		} finally {
 			setBusy(false);
 		}
-	}, [candidate, documentPath, workingDir, refreshPreview]);
+	}, [
+		candidate,
+		documentPath,
+		workingDir,
+		refreshPreview,
+		reloadLilyFile,
+		settings.attorney_name,
+	]);
 
 	if (!planPath || !documentPath || !skeletonPath) return null;
 

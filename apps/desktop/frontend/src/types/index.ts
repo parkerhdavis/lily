@@ -56,6 +56,7 @@ export interface AppSettings {
 	zoom: number | null;
 	footer_size: string | null;
 	last_step: string | null;
+	attorney_name: string | null;
 	autosave: boolean | null;
 	questionnaires_dir: string | null;
 	client_library_dirs: string[];
@@ -83,6 +84,44 @@ export interface RoleOverride {
 	values: Record<string, string>;
 }
 
+/** What produced a generated draft. */
+export interface DraftProvenance {
+	generated_at: string;
+	plan_id: string;
+	plan_version: number;
+	renderer_version: string;
+	clauses?: Record<string, number>;
+	client_data_hash: string;
+	template_hash?: string | null;
+	document_hash?: string | null;
+	agent?: AgentProvenance | null;
+	approval?: ApprovalEvent | null;
+}
+
+/** The drafting agent invocation behind a proposal. */
+export interface AgentProvenance {
+	command: string;
+	model?: string | null;
+	prompt_hash: string;
+	proposal_path: string;
+	flags: FlagSummary;
+}
+
+/** Counts of the agent's flags by severity. */
+export interface FlagSummary {
+	total: number;
+	gaps: number;
+	warnings: number;
+	info: number;
+}
+
+/** The attorney's approval of a candidate. */
+export interface ApprovalEvent {
+	approved_at: string;
+	method: string;
+	approved_by?: string | null;
+}
+
 /** Metadata for a single document tracked in the .lily project file. */
 export interface DocumentMeta {
 	template_rel_path: string;
@@ -96,6 +135,8 @@ export interface DocumentMeta {
 	role_overrides: Record<string, RoleOverride>;
 	/** Per-document variable overrides (variables that diverge from client-level values). */
 	variable_overrides: Record<string, string>;
+	/** What produced the current draft. */
+	provenance?: DraftProvenance | null;
 }
 
 /** Predefined relationship options for the contact dropdown. */
@@ -342,6 +383,7 @@ export interface PlanCandidateReport {
 	flags: AgentFlag[];
 	summary: string;
 	proposal_path: string;
+	provenance?: DraftProvenance | null;
 }
 
 /** A node in the template folder tree. */

@@ -44,6 +44,9 @@ pub struct AppSettings {
     /// Last workflow step the user was on (for "pick up where you left off").
     #[serde(default)]
     pub last_step: Option<String>,
+    /// Attorney whose approvals are recorded on drafts.
+    #[serde(default)]
+    pub attorney_name: Option<String>,
     /// Whether editors auto-save changes. Defaults to true when absent.
     #[serde(default)]
     pub autosave: Option<bool>,

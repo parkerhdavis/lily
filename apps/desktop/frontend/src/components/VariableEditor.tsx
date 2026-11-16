@@ -9,6 +9,7 @@ import { useWorkflowStore } from "@/stores/workflowStore";
 import { extractFilename } from "@/utils/path";
 import DraftCandidate from "./DraftCandidate";
 import DraftReadiness from "./DraftReadiness";
+import DraftRecord from "./DraftRecord";
 import ContactRoleField from "./VariableEditor/ContactRoleField";
 import LinkedVariableField from "./VariableEditor/LinkedVariableField";
 import { renderLivePreview } from "./VariableEditor/previewRenderer";
@@ -613,6 +614,7 @@ export default function VariableEditor() {
 						documentPath={documentPath}
 						skeletonPath={skeletonPath}
 					/>
+					<DraftRecord documentPath={documentPath} />
 					<VersionHistory documentPath={documentPath} />
 					<SectionHeading className="mb-3">Variables</SectionHeading>
 					{variables.length > 0 && (

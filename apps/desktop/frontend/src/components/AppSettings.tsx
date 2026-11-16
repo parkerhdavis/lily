@@ -291,6 +291,28 @@ export default function AppSettings() {
 						</div>
 					</section>
 
+					{/* Attorney */}
+					<section>
+						<SectionHeading className="mb-4">Attorney</SectionHeading>
+						<div className="p-4 rounded-xl border border-base-300 bg-base-100 space-y-3">
+							<div>
+								<label className="text-sm font-medium mb-1 block">Name</label>
+								<input
+									type="text"
+									className="input input-bordered input-sm w-full"
+									defaultValue={settings.attorney_name ?? ""}
+									placeholder="Parker H. Davis"
+									onBlur={(event) =>
+										void save({ attorney_name: event.target.value || null })
+									}
+								/>
+								<p className="text-xs text-base-content/40 mt-1">
+									Recorded as the approver when you approve a draft.
+								</p>
+							</div>
+						</div>
+					</section>
+
 					{/* Drafting Agent */}
 					<section>
 						<SectionHeading className="mb-4">Drafting Agent</SectionHeading>

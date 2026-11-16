@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::lily_file::{self, LilyFile};
 use crate::plan::{self, AgentFlag, PlanCandidateReport};
+use crate::provenance::{self, AgentProvenance, FlagSummary};
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,21 @@ fn read_flags(path: &Path) -> Vec<AgentFlag> {
     serde_json::from_str::<AgentFlags>(&text)
         .map(|parsed| parsed.flags)
         .unwrap_or_default()
+}
+
+fn flag_summary(flags: &[AgentFlag]) -> FlagSummary {
+    let mut summary = FlagSummary {
+        total: flags.len(),
+        ..FlagSummary::default()
+    };
+    for flag in flags {
+        match flag.severity.as_str() {
+            "gap" => summary.gaps += 1,
+            "warning" => summary.warnings += 1,
+            _ => summary.info += 1,
+        }
+    }
+    summary
 }
 
 fn read_summary(path: &Path) -> String {
@@ -243,7 +259,7 @@ pub fn run_draft_agent(
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     let candidate = out_dir.join(format!("lily-candidate-agent-{}.docx", unique));
-    let report = plan::render_plan(
+    let mut report = plan::render_plan(
         plan_file,
         &temp_client,
         Path::new(&skeleton_path),
@@ -251,6 +267,17 @@ pub fn run_draft_agent(
         None,
     )
     .inspect_err(|_| {
+        let _ = fs::remove_dir_all(&out_dir);
+    })?;
+    let flags = read_flags(&out_dir.join("flags.json"));
+    report.provenance.agent = Some(AgentProvenance {
+        command: command.to_string(),
+        model: agent_model.clone(),
+        prompt_hash: provenance::sha256_hex(prompt.as_bytes()),
+        proposal_path: proposal_path.to_string_lossy().to_string(),
+        flags: flag_summary(&flags),
+    });
+    provenance::write_candidate_provenance(&candidate, &report.provenance).inspect_err(|_| {
         let _ = fs::remove_dir_all(&out_dir);
     })?;
     let candidate_html =
@@ -271,9 +298,10 @@ pub fn run_draft_agent(
         plan_version: report.plan_version,
         blocks_rendered: report.blocks_rendered,
         warnings: report.warnings,
-        flags: read_flags(&out_dir.join("flags.json")),
+        flags,
         summary: read_summary(&out_dir.join("summary.md")),
         proposal_path: proposal_path.to_string_lossy().to_string(),
+        provenance: report.provenance,
     })
 }
 
@@ -285,6 +313,7 @@ pub fn approve_agent_candidate(
     candidate_path: String,
     client_dir: String,
     proposal_path: String,
+    approved_by: Option<String>,
 ) -> Result<(), String> {
     let candidate = Path::new(&candidate_path);
     let name = candidate
@@ -306,7 +335,7 @@ pub fn approve_agent_candidate(
     lily_file::backup_client_lily(&client_dir)?;
     lily_file::write_client_lily(&client_dir, &merged)?;
     let candidate_parent = candidate.parent().map(|path| path.to_path_buf());
-    plan::approve_plan_candidate(docx_path, candidate_path)?;
+    plan::approve_plan_candidate(docx_path, candidate_path, approved_by)?;
     if let Some(parent) = candidate_parent {
         if parent
             .file_name()
@@ -417,7 +446,7 @@ mod tests {
         fs::create_dir_all(&client_dir).expect("client directory");
         fs::write(
             client_dir.join("Client.lily"),
-            r#"{"lily_type":"client","lily_version":5,"variables":{"Client Full Name":"Jane Doe"},"documents":{},"contacts":[],"contact_bindings":{}}"#,
+            r#"{"lily_type":"client","lily_version":5,"variables":{"Client Full Name":"Jane Doe"},"documents":{"Will.docx":{"template_rel_path":"Will.docx","created_at":"2026-01-01T00:00:00Z","modified_at":"2026-01-01T00:00:00Z"}},"contacts":[],"contact_bindings":{}}"#,
         )
         .expect("client file");
         let skeleton = directory.join("skeleton.docx");
@@ -467,10 +496,24 @@ echo 'Changed the client name.' > \"$LILY_AGENT_OUT/summary.md\"
             report.candidate_path.clone(),
             client_dir.to_string_lossy().to_string(),
             report.proposal_path.clone(),
+            Some("JANE ATTORNEY".to_string()),
         )
         .expect("approve proposal");
         let lily = lily_file::read_lily_file(&client_dir.to_string_lossy()).expect("client");
         assert_eq!(lily.variables.get("Client Full Name").unwrap(), "PROPOSED");
+        let record = lily
+            .documents
+            .get("Will.docx")
+            .and_then(|meta| meta.provenance.as_ref())
+            .expect("agent provenance recorded");
+        let agent = record.agent.as_ref().expect("agent record");
+        assert_eq!(agent.command, script.to_string_lossy());
+        assert_eq!(agent.flags.total, 1);
+        assert_eq!(record.approval.as_ref().expect("approval").method, "agent-proposal");
+        assert_eq!(
+            record.approval.as_ref().expect("approval").approved_by.as_deref(),
+            Some("JANE ATTORNEY")
+        );
         assert!(fs::read_dir(&client_dir)
             .expect("client entries")
             .any(|entry| entry
