@@ -38,6 +38,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from docx_utils import extract_document_text, render_snapshot
 import lily_compile
+import docx_structure
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
@@ -1081,11 +1082,7 @@ def command_draft(args) -> None:
 			print(f"  - {flag}")
 
 
-def command_layout(args) -> None:
-	docx_path = Path(args.docx).expanduser().resolve()
-	if not docx_path.is_file():
-		fail(f"Document not found: {docx_path}")
-	output_dir = Path(args.output_dir).expanduser().resolve()
+def render_pdf_pages(docx_path: Path, output_dir: Path, dpi: int) -> dict:
 	output_dir.mkdir(parents=True, exist_ok=True)
 	soffice = shutil.which("soffice") or shutil.which("libreoffice")
 	if not soffice:
@@ -1118,7 +1115,7 @@ def command_layout(args) -> None:
 		old.unlink()
 	prefix = output_dir / "page"
 	render = subprocess.run(
-		[pdftoppm, "-png", "-r", str(args.dpi), str(pdf_path), str(prefix)],
+		[pdftoppm, "-png", "-r", str(dpi), str(pdf_path), str(prefix)],
 		capture_output=True,
 		text=True,
 	)
@@ -1128,18 +1125,303 @@ def command_layout(args) -> None:
 		output_dir.glob("page-*.png"),
 		key=lambda path: int(path.stem.rsplit("-", 1)[-1]),
 	)
-	report = {
+	return {
 		"docx": str(docx_path),
 		"pdf": str(pdf_path),
 		"pages": len(images),
 		"images": [str(path) for path in images],
 	}
+
+
+def page_text_stats(pdf_path: Path) -> list[dict]:
+	pdftotext = shutil.which("pdftotext")
+	if not pdftotext:
+		fail("pdftotext is not on PATH")
+	result = subprocess.run(
+		[pdftotext, "-layout", str(pdf_path), "-"],
+		capture_output=True,
+		text=True,
+	)
+	if result.returncode != 0:
+		fail(result.stderr.strip() or f"pdftotext exited {result.returncode}")
+	pages = result.stdout.split("\f")
+	stats = []
+	for index, page in enumerate(pages, 1):
+		lines = [line for line in page.splitlines() if line.strip()]
+		if index == len(pages) and not lines:
+			continue
+		stats.append(
+			{
+				"page": index,
+				"lines": len(lines),
+				"blank": len(lines) == 0,
+				"near_blank": len(lines) == 1,
+			}
+		)
+	return stats
+
+
+def command_review(args) -> None:
+	plan_path = Path(args.plan).expanduser().resolve()
+	if not plan_path.is_file():
+		fail(f"Plan not found: {plan_path}")
+	plan = read_json(plan_path)
+	client_path, client = find_client_lily(Path(args.client_dir).expanduser().resolve())
+	skeleton = plan_skeleton(plan_path, plan, args.template)
+	output_dir = Path(args.output_dir).expanduser().resolve()
+	output_dir.mkdir(parents=True, exist_ok=True)
+	candidate = output_dir / "candidate.docx"
+
+	# Render into a scratch copy of the client file so the review cannot
+	# write through resolve_contact_variables to the real client record.
+	work_client = output_dir / "client"
+	work_client.mkdir(exist_ok=True)
+	for old in work_client.glob("*.lily"):
+		old.unlink()
+	shutil.copy2(client_path, work_client / client_path.name)
+
+	render = render_plan_file(plan_path, work_client, skeleton, candidate)
+	variables, lists = audit_variables(client)
+	roles = client_role_names(client)
+	expanded = expand_excerpts(plan, plan_path.parent, variables, lists)
+	audit = audit_plan(expanded, variables, lists, roles)
+
+	candidate_structure = docx_structure.extract_document(candidate)
+	template_structure = docx_structure.extract_document(skeleton)
+	comparison = {
+		"template": docx_structure.compare_by_ordinal(template_structure, candidate_structure),
+	}
+	reference_path = None
+	if args.reference:
+		reference_path = Path(args.reference).expanduser().resolve()
+		if not reference_path.is_file():
+			fail(f"Reference document not found: {reference_path}")
+		reference_structure = docx_structure.extract_document(reference_path)
+		comparison["reference"] = docx_structure.compare_by_similarity(
+			reference_structure, candidate_structure
+		)
+
+	candidate_parts = list(candidate_structure["headers"]) + list(candidate_structure["footers"])
+	sample_flags = docx_structure.sample_text_flags(candidate_parts)
+	layout = render_pdf_pages(candidate, output_dir, args.dpi)
+	layout["page_text"] = page_text_stats(Path(layout["pdf"]))
+
+	flags: list[dict] = []
+	for slot in audit["slots"]["empty"]:
+		severity = "error" if slot["required"] else "info"
+		flags.append(
+			{
+				"severity": severity,
+				"category": "audit",
+				"location": slot["name"],
+				"message": (
+					f"Required slot is empty: {slot['name']}"
+					if slot["required"]
+					else f"Optional slot is empty: {slot['name']}"
+				),
+			}
+		)
+	for role in audit["missing_roles"]:
+		flags.append(
+			{
+				"severity": "error",
+				"category": "audit",
+				"location": role,
+				"message": f"Role has no assignment: {role}",
+			}
+		)
+	for entry in sample_flags:
+		severity = "error" if "DOE" in entry["match"].upper() else "warning"
+		flags.append(
+			{
+				"severity": severity,
+				"category": "header_footer",
+				"location": entry["part"],
+				"message": f"Template residue in {entry['part']}: {entry['match']}",
+				"evidence": entry["text"],
+			}
+		)
+	for page in layout["page_text"]:
+		if page["blank"] or page["near_blank"]:
+			state = "blank" if page["blank"] else "near blank"
+			flags.append(
+				{
+					"severity": "warning",
+					"category": "layout",
+					"location": f"page {page['page']}",
+					"message": f"Page {page['page']} is {state}",
+				}
+			)
+	reference_comparison = comparison.get("reference")
+	if reference_comparison and reference_comparison["exact_text_formatting_differences"]:
+		flags.append(
+			{
+				"severity": "warning",
+				"category": "structure",
+				"location": "reference comparison",
+				"message": (
+					f"{reference_comparison['exact_text_formatting_differences']} matched paragraph(s) "
+					"with identical text differ in formatting from the reference"
+				),
+				"evidence": [
+					delta
+					for delta in reference_comparison["deltas"]
+					if delta.get("exact_text")
+				][:10],
+			}
+		)
+	if comparison["template"]["formatting_differences"]:
+		flags.append(
+			{
+				"severity": "info",
+				"category": "structure",
+				"location": "template comparison",
+				"message": (
+					f"{comparison['template']['formatting_differences']} paragraph(s) "
+					"differ in formatting from the template at the same ordinal"
+				),
+				"evidence": comparison["template"]["deltas"][:10],
+			}
+		)
+
+	severity_counts = {"error": 0, "warning": 0, "info": 0}
+	for flag in flags:
+		severity_counts[flag["severity"]] += 1
+
+	review = {
+		"plan": {
+			"path": str(plan_path),
+			"id": plan.get("id"),
+			"version": plan.get("version"),
+		},
+		"client": str(client_path),
+		"candidate": str(candidate),
+		"template": str(skeleton),
+		"reference": str(reference_path) if reference_path else None,
+		"render": render,
+		"audit": audit,
+		"structure": {
+			"candidate": {
+				"paragraphs": candidate_structure["paragraph_count"],
+				"words": candidate_structure["word_count"],
+			},
+			"template": {
+				"paragraphs": template_structure["paragraph_count"],
+				"words": template_structure["word_count"],
+			},
+			"comparison": comparison,
+			"headers": docx_structure.part_texts(candidate_structure["headers"]),
+			"footers": docx_structure.part_texts(candidate_structure["footers"]),
+		},
+		"layout": layout,
+		"flags": flags,
+		"summary": {
+			"errors": severity_counts["error"],
+			"warnings": severity_counts["warning"],
+			"infos": severity_counts["info"],
+			"pages": layout["pages"],
+		},
+	}
+	review_path = output_dir / "review.json"
+	review_path.write_text(json.dumps(review, indent=2) + "\n")
+
+	lines = [
+		f"# Review: {candidate.name}",
+		"",
+		f"- Plan: {plan.get('id')} v{plan.get('version')}",
+		f"- Client: {client_path}",
+		f"- Template: {skeleton}",
+		f"- Reference: {reference_path or 'none'}",
+		"",
+		"## Summary",
+		"",
+		f"- Errors: {severity_counts['error']}",
+		f"- Warnings: {severity_counts['warning']}",
+		f"- Infos: {severity_counts['info']}",
+		f"- Pages: {layout['pages']}",
+		f"- Paragraphs: {candidate_structure['paragraph_count']}",
+		"",
+		"## Flags",
+		"",
+	]
+	if not flags:
+		lines.append("No flags.")
+	else:
+		for severity in ("error", "warning", "info"):
+			entries = [flag for flag in flags if flag["severity"] == severity]
+			if not entries:
+				continue
+			lines.append(f"### {severity.title()}s")
+			lines.append("")
+			for flag in entries:
+				lines.append(f"- [{flag['category']}] {flag['message']}")
+			lines.append("")
+	lines.extend(
+		[
+			"## Plan Audit",
+			"",
+			f"- Required slots empty: {sum(1 for slot in audit['slots']['empty'] if slot['required'])}",
+			f"- Missing roles: {len(audit['missing_roles'])}",
+			f"- Undeclared slots: {len(audit['slots']['undeclared'])}",
+			"",
+			"## Layout",
+			"",
+		]
+	)
+	for page in layout["page_text"]:
+		state = "blank" if page["blank"] else f"{page['lines']} lines"
+		lines.append(f"- Page {page['page']}: {state}")
+	lines.append("")
+	lines.append("## Structure")
+	lines.append("")
+	if reference_comparison:
+		lines.append(
+			f"- Reference: {reference_comparison['matched']} matched, "
+			f"{reference_comparison['formatting_differences']} formatting difference(s), "
+			f"{reference_comparison['exact_text_formatting_differences']} on identical text"
+		)
+	lines.append(
+		f"- Template: {comparison['template']['formatting_differences']} ordinal difference(s)"
+	)
+	if reference_comparison and reference_comparison["unmatched_reference"]:
+		lines.append("")
+		lines.append("Reference paragraphs with no candidate match:")
+		for text in reference_comparison["unmatched_reference"]:
+			lines.append(f"- {text}")
+	lines.append("")
+	(output_dir / "review.md").write_text("\n".join(lines))
+
+	if args.json:
+		print(
+			json.dumps(
+				{
+					"review": str(review_path),
+					"markdown": str(output_dir / "review.md"),
+					"candidate": str(candidate),
+					"summary": review["summary"],
+				},
+				indent=2,
+			)
+		)
+	else:
+		print(f"Reviewed {candidate.name}")
+		print(f"Errors: {severity_counts['error']}, warnings: {severity_counts['warning']}, infos: {severity_counts['info']}")
+		print(f"Review: {review_path}")
+		print(f"Markdown: {output_dir / 'review.md'}")
+
+
+def command_layout(args) -> None:
+	docx_path = Path(args.docx).expanduser().resolve()
+	if not docx_path.is_file():
+		fail(f"Document not found: {docx_path}")
+	output_dir = Path(args.output_dir).expanduser().resolve()
+	report = render_pdf_pages(docx_path, output_dir, args.dpi)
 	if args.json:
 		print(json.dumps(report, indent=2))
 	else:
-		print(f"Rendered {len(images)} page(s) from {docx_path.name}")
-		print(f"PDF: {pdf_path}")
-		for image in images:
+		print(f"Rendered {report['pages']} page(s) from {docx_path.name}")
+		print(f"PDF: {report['pdf']}")
+		for image in report["images"]:
 			print(image)
 
 
@@ -1278,6 +1560,23 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	draft.add_argument("--json", action="store_true", help="Print the bundle summary as JSON")
 	draft.set_defaults(func=command_draft)
+
+	review = subparsers.add_parser(
+		"review",
+		help="Render, audit, and review a plan against its template and a reference",
+	)
+	review.add_argument("--plan", required=True, help="Path to the plan JSON")
+	review.add_argument("--client-dir", required=True, help="Client folder containing the .lily file")
+	review.add_argument("--output-dir", required=True, help="Directory for the review bundle")
+	review.add_argument(
+		"--template", help="Layout template; defaults to the plan's layout"
+	)
+	review.add_argument(
+		"--reference", help="Reference .docx to compare formatting against"
+	)
+	review.add_argument("--dpi", type=int, default=110, help="Page image resolution")
+	review.add_argument("--json", action="store_true", help="Print the review summary as JSON")
+	review.set_defaults(func=command_review)
 
 	layout = subparsers.add_parser(
 		"layout", help="Render a document to PDF pages for layout review"

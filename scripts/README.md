@@ -1,6 +1,6 @@
 # Lily Agent Tool Layer
 
-`scripts/lily` is the command line over the client, template, document, and plan primitives that agent workflows need. It reads `.lily` client files and template libraries, inspects a `.docx` without the UI, extracts and diffs normalized document text, renders and audits document plans through `lily-render`, and runs the drafting agent. It prints JSON unless a command is explicitly a text diff.
+`scripts/lily` is the command line over the client, template, document, and plan primitives that agent workflows need. It reads `.lily` client files and template libraries, inspects a `.docx` without the UI, extracts and diffs normalized document text, renders and audits document plans through `lily-render`, and produces review bundles for the drafting agent. It prints JSON unless a command is explicitly a text diff.
 
 ## Commands
 
@@ -37,6 +37,11 @@ scripts/lily draft --plan "/path/to/plan.json" --client-dir "/path/to/client" \
   --output-dir ".tmp/draft/review" --json
 scripts/lily layout --docx "/path/to/draft.docx" --output-dir ".tmp/draft/pages"
 
+# Render, audit, and compare a plan against its template and a reference draft
+scripts/lily review --plan "/path/to/plan.json" --client-dir "/path/to/client" \
+  --output-dir ".tmp/draft/review" \
+  --reference "/path/to/as-drafted.docx" --json
+
 # Check the environment
 scripts/lily doctor
 scripts/lily doctor --strict
@@ -52,8 +57,9 @@ scripts/lily doctor --strict
 
 - `LILY_RENDER_BIN` overrides the `lily-render` path. The default is `target/debug/lily-render` at the repository root.
 - `LILY_TEMPLATES` overrides the template library path. The default is `~/Carelaw/carelaw-lily/Templates`.
+- `review` also needs `pdftotext` for page text statistics; `layout` and `review` need LibreOffice and `pdftoppm`.
 
-Build the renderer before using `plan render`, `draft`, or `doctor --strict`:
+Build the renderer before using `plan render`, `draft`, `review`, or `doctor --strict`:
 
 ```bash
 cd apps/desktop/backend
