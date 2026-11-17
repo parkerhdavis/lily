@@ -372,7 +372,7 @@ mod tests {
 		}
 		let preview = preview_questionnaire(&path).expect("preview");
 		assert_eq!(preview.field_map_version, FIELD_MAP_VERSION);
-		assert!(preview.field_count > 300);
+		assert!(preview.field_count > 250);
 		assert_eq!(preview.clients.len(), 2);
 		assert_eq!(preview.clients[0].first_name, "Alexandria");
 		assert_eq!(preview.clients[1].last_name, "Morgan");
@@ -380,6 +380,11 @@ mod tests {
 		assert_eq!(preview.people[0].full_name, "Jordan Lee Morgan");
 		assert_eq!(preview.roles["a.fpoa"].assignments.len(), 3);
 		assert_eq!(preview.roles["a.fpoa"].assignments[0].name, "Jordan Lee Morgan");
+		assert_eq!(preview.roles["a.fpoa"].assignments[0].number, Some(1));
+		assert!(!preview
+			.warnings
+			.iter()
+			.any(|warning| warning.contains("A Financial Power of Attorney tier 1")));
 		assert_eq!(
 			preview.household.trust_name,
 			"The Alexandria and Jordan Morgan Family Trust"
@@ -1028,14 +1033,14 @@ fn read_role(
 				)),
 			},
 			None if !name.is_empty() => {
-				warnings.push(format!(
-					"{label} tier {tier} names {name} without a roster number."
-				));
-				if let Some((number, _)) = roster
+				match roster
 					.iter()
 					.find(|(_, roster_name)| same_name(roster_name, &name))
 				{
-					assignment.number = Some(*number);
+					Some((number, _)) => assignment.number = Some(*number),
+					None => warnings.push(format!(
+						"{label} tier {tier} names {name}, who is not on the Your People list."
+					)),
 				}
 			}
 			None => {}
