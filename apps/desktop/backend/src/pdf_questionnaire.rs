@@ -361,7 +361,7 @@ mod tests {
 			.required_documents
 			.iter()
 			.filter(|document| document.client_key.as_deref() == Some("b"))
-			.all(|document| !document.draft_ready));
+			.all(|document| document.draft_ready));
 	}
 
 	#[test]
@@ -412,7 +412,7 @@ mod tests {
 		let lily = build_client_lily(&preview, "Questionnaire.pdf");
 		assert_eq!(lily.variables["Client Full Name"], "Alexandria Morgan");
 		assert_eq!(lily.co_client.as_ref().expect("co-client").first_name, "Jordan");
-		assert_eq!(lily.contacts.len(), 7);
+		assert_eq!(lily.contacts.len(), 6);
 		assert!(lily
 			.contacts
 			.iter()
@@ -430,11 +430,10 @@ mod tests {
 			.required_documents
 			.iter()
 			.filter(|document| document.client_key.as_deref() == Some("b"))
-			.all(|document| !document.draft_ready));
+			.all(|document| document.draft_ready));
 		assert!(lily
 			.required_documents
 			.iter()
-			.filter(|document| document.client_key.as_deref() == Some("a"))
 			.all(|document| document.draft_ready));
 	}
 
@@ -463,6 +462,57 @@ mod tests {
 		assert_eq!(lily.variables["Client has Children"], "true");
 		assert_eq!(lily.variables["Has Minor Children"], "true");
 		assert!(lily.questionnaire_pdf.as_ref().expect("pdf record").sha256.len() == 64);
+		std::fs::remove_dir_all(&parent).ok();
+	}
+
+	#[test]
+	fn drafts_and_renders_the_second_clients_gpoa() {
+		let demo = demo_path();
+		let templates = std::path::Path::new(
+			"/home/parker/Carelaw/carelaw-lily/Templates",
+		);
+		if !demo.is_file() || !templates.is_dir() {
+			return;
+		}
+		let parent = std::env::temp_dir().join(format!("lily-b-gpoa-{}", Uuid::new_v4()));
+		std::fs::create_dir_all(&parent).expect("parent");
+		let created = create_client_from_questionnaire(
+			parent.to_string_lossy().to_string(),
+			demo.to_string_lossy().to_string(),
+			None,
+		)
+		.expect("create client");
+		let lily = crate::lily_file::read_lily_file(&created.directory).expect("lily");
+		let requirement = lily
+			.required_documents
+			.iter()
+			.find(|document| {
+				document.client_key.as_deref() == Some("b")
+					&& document.template_rel_path.contains("GPOA Template")
+			})
+			.expect("B GPOA");
+		let filename = crate::lily_file::draft_required_document(
+			created.directory.clone(),
+			requirement.id.clone(),
+			templates.to_string_lossy().to_string(),
+		)
+		.expect("draft");
+		let document = std::path::Path::new(&created.directory).join(&filename);
+		let plan = templates
+			.join("02 - Power of Attorney and Medical Templates/Plans/GPOA.plan.json");
+		let skeleton = templates
+			.join("02 - Power of Attorney and Medical Templates/GPOA Template.docx");
+		crate::plan::render_plan_document(
+			document.to_string_lossy().to_string(),
+			plan.to_string_lossy().to_string(),
+			Some(skeleton.to_string_lossy().to_string()),
+		)
+		.expect("render");
+		let text = crate::docx_ops::document_lines(&document)
+			.expect("lines")
+			.join(" ");
+		assert!(text.contains("JORDAN MORGAN"), "{text}");
+		assert!(text.contains("ALEXANDRIA RAE MORGAN"), "{text}");
 		std::fs::remove_dir_all(&parent).ok();
 	}
 
@@ -1439,12 +1489,16 @@ fn build_contacts(preview: &QuestionnairePreview) -> ContactIndex {
 	}
 	let mut client_ids = BTreeMap::new();
 	for client in &preview.clients {
-		let full_name = [client.first_name.as_str(), client.last_name.as_str()]
-			.iter()
-			.filter(|part| !part.is_empty())
-			.copied()
-			.collect::<Vec<_>>()
-			.join(" ");
+		let full_name = [
+			client.first_name.as_str(),
+			client.middle_name.as_str(),
+			client.last_name.as_str(),
+		]
+		.iter()
+		.filter(|part| !part.is_empty())
+		.copied()
+		.collect::<Vec<_>>()
+		.join(" ");
 		let existing = contacts.iter_mut().find(|contact| {
 			same_name(&contact.full_name, &full_name) && !full_name.is_empty()
 		});
@@ -1525,10 +1579,13 @@ fn binding_for_role(
 		.assignments
 		.iter()
 		.filter_map(|assignment| {
-			let id = assignment
-				.number
-				.and_then(|number| roster.get(&number).cloned())
-				.or_else(|| names.get(&normalize_name(&assignment.name)).cloned())?;
+			// Prefer the written name when it matches a known contact; a
+			// roster number that disagrees with the name is a form error, and
+			// the name is the human's actual answer.
+			let id = names
+				.get(&normalize_name(&assignment.name))
+				.cloned()
+				.or_else(|| assignment.number.and_then(|number| roster.get(&number).cloned()))?;
 			Some(crate::lily_file::RoleAssignment {
 				contact_ids: vec![id],
 				values: HashMap::new(),
@@ -1556,10 +1613,10 @@ fn binding_for_names(
 	let ids: Vec<String> = assignments
 		.iter()
 		.filter_map(|assignment| {
-			assignment
-				.number
-				.and_then(|number| roster.get(&number).cloned())
-				.or_else(|| names.get(&normalize_name(&assignment.name)).cloned())
+			names
+				.get(&normalize_name(&assignment.name))
+				.cloned()
+				.or_else(|| assignment.number.and_then(|number| roster.get(&number).cloned()))
 		})
 		.collect();
 	if ids.is_empty() {
@@ -1619,7 +1676,7 @@ fn required_documents(
 			continue;
 		};
 		let name = format!("{} {}", client.first_name, client.last_name);
-		let ready = key == "a";
+		let ready = true;
 		if preview.roles.contains_key(&format!("{key}.fpoa")) {
 			documents.push(required_document(
 				GPOA_TEMPLATE,

@@ -154,6 +154,8 @@ export interface DocumentMeta {
 	role_overrides: Record<string, RoleOverride>;
 	/** Per-document variable overrides (variables that diverge from client-level values). */
 	variable_overrides: Record<string, string>;
+	/** Which client this document belongs to in a joint matter. */
+	client_key?: string | null;
 	/** What produced the current draft. */
 	provenance?: DraftProvenance | null;
 }

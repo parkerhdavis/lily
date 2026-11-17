@@ -15,6 +15,46 @@ import {
 } from "./helpers";
 import type { WorkflowSlice } from "./types";
 
+const CO_CLIENT_VARIABLES = [
+	"Client First Name",
+	"Client Middle Name",
+	"Client Last Name",
+	"Client Full Name",
+	"Client Address",
+	"Client City",
+	"Client State",
+	"Client Zip",
+	"Client County",
+	"Client Phone",
+	"Client Email",
+	"Client Spouse Name",
+];
+
+/** Show the second client's identity when editing a document that belongs to
+ *  the co-client in a joint matter. The renderer does the same swap from
+ *  `co_client`; this keeps the editor in step with the rendered document. */
+function applyCoClientValues(
+	lilyFile: LilyFile,
+	values: Record<string, string>,
+): void {
+	const co = lilyFile.co_client;
+	if (!co) return;
+	values["Client First Name"] = co.first_name;
+	values["Client Middle Name"] = co.middle_name;
+	values["Client Last Name"] = co.last_name;
+	values["Client Full Name"] = [co.first_name, co.last_name]
+		.filter(Boolean)
+		.join(" ");
+	values["Client Address"] = co.address;
+	values["Client City"] = co.city;
+	values["Client State"] = co.state;
+	values["Client Zip"] = co.zip;
+	values["Client County"] = co.county;
+	values["Client Phone"] = co.phone;
+	values["Client Email"] = co.email;
+	values["Client Spouse Name"] = lilyFile.variables["Client Full Name"] ?? "";
+}
+
 function planPathFor(
 	templatesDir: string,
 	schema: VariableSchema,
@@ -122,6 +162,7 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 					destDir: workingDir,
 					filename,
 					templateRelPath,
+					clientKey: null,
 				});
 
 				const variables = await loadTemplateVariables(
@@ -267,6 +308,9 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 				)) {
 					variableValues[varName] = value;
 				}
+			}
+			if (docMeta?.client_key === "b") {
+				applyCoClientValues(updatedLilyFile, variableValues);
 			}
 
 			// Sync current values into the .docx so it reflects the
@@ -417,9 +461,15 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 			// Plan templates read from the .lily, so persist the current
 			// document values before rendering.
 			if (templateSchema?.engine === "plan" && workingDir) {
+				const sharedValues = { ...variableValues };
+				if (docMeta?.client_key === "b") {
+					for (const key of CO_CLIENT_VARIABLES) {
+						delete sharedValues[key];
+					}
+				}
 				await invoke("save_client_variables", {
 					workingDir,
-					variableValues,
+					variableValues: sharedValues,
 				});
 			}
 

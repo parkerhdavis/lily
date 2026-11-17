@@ -259,6 +259,7 @@ mod tests {
                 variable_names: Vec::new(),
                 role_overrides: Default::default(),
                 variable_overrides: Default::default(),
+                client_key: None,
                 provenance: None,
             },
         );

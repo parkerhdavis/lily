@@ -154,6 +154,7 @@ pub fn copy_template(
     dest_dir: String,
     filename: String,
     template_rel_path: String,
+    client_key: Option<String>,
 ) -> Result<String, String> {
     info!(%template_path, %filename, "Copying template");
     let src = Path::new(&template_path);
@@ -166,7 +167,7 @@ pub fn copy_template(
     fs::copy(src, &dest).map_err(|e| format!("Failed to copy template: {}", e))?;
 
     // Record template provenance in the .lily file
-    lily_file::record_document(&dest_dir, &filename, &template_rel_path)?;
+    lily_file::record_document(&dest_dir, &filename, &template_rel_path, client_key.as_deref())?;
 
     Ok(dest.to_string_lossy().to_string())
 }

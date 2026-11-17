@@ -404,6 +404,10 @@ pub struct DocumentMeta {
     /// the document uses this value instead of the client-level value.
     #[serde(default)]
     pub variable_overrides: HashMap<String, String>,
+    /// Which client this document belongs to in a joint matter: "a", "b",
+    /// or None for a joint document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key: Option<String>,
     /// What produced the current draft: plan, clauses, client-data
     /// fingerprint, renderer, agent, and approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -652,6 +656,7 @@ fn migrate_legacy_sidecar(working_dir: &str) -> Result<LilyFile, String> {
                 variable_names,
                 role_overrides: HashMap::new(),
                 variable_overrides: HashMap::new(),
+                client_key: None,
                 provenance: None,
             },
         );
@@ -690,6 +695,7 @@ pub fn record_document(
     working_dir: &str,
     filename: &str,
     template_rel_path: &str,
+    client_key: Option<&str>,
 ) -> Result<(), String> {
     let mut lily = read_lily_file(working_dir)?;
     let now = Utc::now();
@@ -702,6 +708,7 @@ pub fn record_document(
             variable_names: Vec::new(),
             role_overrides: HashMap::new(),
             variable_overrides: HashMap::new(),
+            client_key: client_key.map(str::to_string),
             provenance: None,
         },
     );
@@ -934,6 +941,7 @@ pub fn new_version_document(working_dir: String, filename: String) -> Result<Str
             variable_names,
             role_overrides: HashMap::new(),
             variable_overrides: HashMap::new(),
+            client_key: None,
             provenance: None,
         },
     );
@@ -1714,6 +1722,81 @@ pub fn add_required_document(
     Ok(doc)
 }
 
+/// Draft a proposed required document from its template, preserving the
+/// document's client key so the renderer uses that client's identity and
+/// role set. Returns the new document filename.
+#[tauri::command]
+pub fn draft_required_document(
+    working_dir: String,
+    document_id: String,
+    templates_dir: String,
+) -> Result<String, String> {
+    let lily = read_lily_file(&working_dir)?;
+    let requirement = lily
+        .required_documents
+        .iter()
+        .find(|document| document.id == document_id)
+        .ok_or_else(|| format!("Required document '{}' not found", document_id))?
+        .clone();
+    if !requirement.draft_ready {
+        return Err(requirement.notes.clone());
+    }
+    if requirement.document_filename.is_some() {
+        return Err("This document already has a draft.".to_string());
+    }
+    let template_full = Path::new(&templates_dir).join(&requirement.template_rel_path);
+    if !template_full.is_file() {
+        return Err(format!(
+            "Template not found: {}",
+            requirement.template_rel_path
+        ));
+    }
+    let proposed = requirement
+        .proposed_filename
+        .clone()
+        .unwrap_or_else(|| {
+            let stem = Path::new(&requirement.template_rel_path)
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("Document");
+            format!("{}.docx", stem)
+        });
+    let mut taken: std::collections::HashSet<String> =
+        lily.documents.keys().cloned().collect();
+    let filename = dedupe_filename(Path::new(&working_dir), &proposed, &mut taken);
+
+    let docx_path = crate::docx_ops::copy_template(
+        template_full.to_string_lossy().to_string(),
+        working_dir.clone(),
+        filename.clone(),
+        requirement.template_rel_path.clone(),
+        requirement.client_key.clone(),
+    )?;
+
+    let mut updated = read_lily_file(&working_dir)?;
+    if let Some(meta) = updated.documents.get_mut(&filename) {
+        if let Ok(schema) = crate::docx_ops::load_template_schema(
+            templates_dir,
+            requirement.template_rel_path.clone(),
+        ) {
+            let mut names: Vec<String> = schema.variables.keys().cloned().collect();
+            names.sort_by_key(|name| name.to_lowercase());
+            meta.variable_names = names;
+        }
+    }
+    if let Some(document) = updated
+        .required_documents
+        .iter_mut()
+        .find(|document| document.id == document_id)
+    {
+        document.document_filename = Some(filename.clone());
+        document.status = DocumentStatus::Drafting;
+    }
+    write_lily_file(&working_dir, &updated)?;
+    let _ = docx_path;
+    Ok(filename)
+}
+
 /// Update the status of a required document.
 #[tauri::command]
 pub fn update_required_document_status(
@@ -2426,6 +2509,7 @@ fn recreate_document_from_template(
         target_dir.to_string(),
         filename.to_string(),
         template_rel_path.to_string(),
+        None,
     )?;
 
     let mut variable_names: Vec<String> = schema.variables.keys().cloned().collect();
@@ -2818,6 +2902,7 @@ mod tests {
                 variable_names: vec!["Client Full Name".into()],
                 role_overrides: HashMap::new(),
                 variable_overrides: HashMap::new(),
+                client_key: None,
                 provenance: None,
             },
         );
@@ -3059,6 +3144,62 @@ mod tests {
     }
 
     #[test]
+    fn drafting_a_required_document_preserves_the_client_key() {
+        let directory = std::env::temp_dir().join(format!(
+            "lily-draft-required-{}",
+            Uuid::new_v4()
+        ));
+        let client_dir = directory.join("client");
+        let templates_dir = directory.join("templates");
+        std::fs::create_dir_all(&client_dir).expect("client dir");
+        std::fs::create_dir_all(&templates_dir).expect("templates dir");
+        std::fs::write(templates_dir.join("Template.docx"), b"template").expect("template");
+        std::fs::write(
+            templates_dir.join("_templates.lily"),
+            r#"{"lily_type":"template-library","templates":{"Template.docx":{"engine":"plan","plan_path":"plan.json","variables":{"Client Full Name":{"label":"Client Full Name"}}}}}"#,
+        )
+        .expect("library");
+        std::fs::write(templates_dir.join("plan.json"), r#"{"id":"test","version":1,"layout":"Template.docx","blocks":[]}"#)
+            .expect("plan");
+        let mut lily = LilyFile::default();
+        lily.required_documents.push(RequiredDocument {
+            id: "req".to_string(),
+            template_rel_path: "Template.docx".to_string(),
+            status: DocumentStatus::NotStarted,
+            document_filename: None,
+            proposed_filename: Some("GPOA - Jordan Morgan.docx".to_string()),
+            notes: String::new(),
+            signed_artifacts: Vec::new(),
+            client_key: Some("b".to_string()),
+            draft_ready: true,
+        });
+        write_lily_file(&client_dir.to_string_lossy(), &lily).expect("lily");
+
+        let filename = draft_required_document(
+            client_dir.to_string_lossy().to_string(),
+            "req".to_string(),
+            templates_dir.to_string_lossy().to_string(),
+        )
+        .expect("draft");
+        assert_eq!(filename, "GPOA - Jordan Morgan.docx");
+        assert!(client_dir.join(&filename).is_file());
+        let loaded = read_lily_file(&client_dir.to_string_lossy()).expect("reload");
+        assert_eq!(
+            loaded.documents[&filename].client_key.as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            loaded.required_documents[0].document_filename.as_deref(),
+            Some(filename.as_str())
+        );
+        assert_eq!(
+            loaded.required_documents[0].status,
+            DocumentStatus::Drafting
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
     fn migrating_a_client_writes_a_backup_and_backfills_required_documents() {
         let directory = std::env::temp_dir().join(format!(
             "lily-schema-migrate-{}",
@@ -3208,6 +3349,7 @@ mod tests {
                 variable_names: Vec::new(),
                 role_overrides: HashMap::new(),
                 variable_overrides: HashMap::new(),
+                client_key: None,
                 provenance: None,
             },
         );

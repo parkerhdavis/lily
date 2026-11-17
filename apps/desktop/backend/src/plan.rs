@@ -367,6 +367,84 @@ fn binding_assignment(
 }
 
 impl DataView {
+	/// Narrow a client-level data view to one client in a joint matter.
+	///
+	/// The primary client's identity stays in the top-level variables; the
+	/// second client's identity comes from `co_client`, and each client's
+	/// roles come from `client_roles[key]`, with the shared trustee and
+	/// guardian roles added back from the top-level bindings.
+	fn apply_client_scope(&mut self, lily: &LilyFile, key: &str) {
+		if key == "b" {
+			if let Some(co) = &lily.co_client {
+				let full_name = [co.first_name.as_str(), co.last_name.as_str()]
+					.iter()
+					.filter(|part| !part.is_empty())
+					.copied()
+					.collect::<Vec<_>>()
+					.join(" ");
+				for (name, value) in [
+					("Client First Name", &co.first_name),
+					("Client Middle Name", &co.middle_name),
+					("Client Last Name", &co.last_name),
+					("Client Address", &co.address),
+					("Client City", &co.city),
+					("Client State", &co.state),
+					("Client Zip", &co.zip),
+					("Client County", &co.county),
+					("Client Phone", &co.phone),
+					("Client Email", &co.email),
+				] {
+					self.variables.insert(name.to_string(), value.clone());
+				}
+				self.variables
+					.insert("Client Full Name".to_string(), full_name);
+				let spouse_name = lily
+					.variables
+					.get("Client Full Name")
+					.cloned()
+					.unwrap_or_default();
+				self.variables
+					.insert("Client Spouse Name".to_string(), spouse_name);
+			}
+		}
+
+		let Some(roles) = lily.client_roles.get(key) else {
+			return;
+		};
+		self.roles.clear();
+		for (role, binding) in roles {
+			let assignments: Vec<RoleAssignment> = match &binding.assignments {
+				Some(assignments) => assignments.clone(),
+				None => binding_assignment(binding, &lily.variables)
+					.into_iter()
+					.collect(),
+			};
+			if assignments.iter().any(|assignment| {
+				!assignment.contact_ids.is_empty() || !assignment.values.is_empty()
+			}) {
+				self.roles.insert(role.clone(), assignments);
+			}
+		}
+		for role in ["Successor Trustee", "Guardian"] {
+			if self.roles.contains_key(role) {
+				continue;
+			}
+			if let Some(binding) = lily.contact_bindings.get(role) {
+				let assignments: Vec<RoleAssignment> = match &binding.assignments {
+					Some(assignments) => assignments.clone(),
+					None => binding_assignment(binding, &lily.variables)
+						.into_iter()
+						.collect(),
+				};
+				if assignments.iter().any(|assignment| {
+					!assignment.contact_ids.is_empty() || !assignment.values.is_empty()
+				}) {
+					self.roles.insert(role.to_string(), assignments);
+				}
+			}
+		}
+	}
+
 	pub fn from_lily(lily: &LilyFile) -> Self {
 		let mut view = Self {
 			variables: lily.variables.clone(),
@@ -2939,6 +3017,9 @@ pub fn render_plan(
 		.as_deref()
 		.and_then(|name| lily.documents.get(name))
 	{
+		if let Some(client_key) = &meta.client_key {
+			view.apply_client_scope(&lily, client_key);
+		}
 		for (name, value) in &meta.variable_overrides {
 			view.variables.insert(name.clone(), value.clone());
 		}
@@ -3637,6 +3718,67 @@ mod tests {
 		assert!(eval_condition(&json!({"eq": ["has_spouse", true]}), &view()).unwrap());
 		assert!(!eval_condition(&json!({"eq": ["has_spouse", false]}), &view()).unwrap());
 		assert!(eval_condition(&json!({"eq": ["Has Spouse", "true"]}), &view()).unwrap());
+	}
+
+	#[test]
+	fn client_scope_swaps_identity_and_roles() {
+		let mut lily = LilyFile::default();
+		lily.variables.insert("Client First Name".into(), "Alexandria".into());
+		lily.variables.insert("Client Last Name".into(), "Morgan".into());
+		lily.variables.insert("Client Full Name".into(), "Alexandria Morgan".into());
+		lily.co_client = Some(lily_file::ClientProfile {
+			first_name: "Jordan".into(),
+			last_name: "Morgan".into(),
+			..lily_file::ClientProfile::default()
+		});
+		let alexandria = Contact {
+			id: "a".into(),
+			full_name: "Alexandria Morgan".into(),
+			first_name: "Alexandria".into(),
+			middle_name: String::new(),
+			last_name: "Morgan".into(),
+			relationship: "Client".into(),
+			other_relationship: String::new(),
+			phone: String::new(),
+			email: String::new(),
+			address: String::new(),
+			city: String::new(),
+			state: String::new(),
+			zip: String::new(),
+			is_minor: false,
+			preferred_name: String::new(),
+			other_names: String::new(),
+			date_of_birth: String::new(),
+			roster_number: None,
+		};
+		let jordan = Contact {
+			id: "b".into(),
+			full_name: "Jordan Morgan".into(),
+			relationship: "Spouse".into(),
+			..alexandria.clone()
+		};
+		lily.contacts = vec![alexandria.clone(), jordan];
+		lily.client_roles.insert(
+			"b".into(),
+			BTreeMap::from([(
+				"FPOA Agent".to_string(),
+				lily_file::ContactBinding {
+					contact_id: Some(alexandria.id.clone()),
+					variable_mappings: HashMap::new(),
+					contact_ids: None,
+					assignments: Some(vec![RoleAssignment {
+						contact_ids: vec![alexandria.id.clone()],
+						values: HashMap::new(),
+					}]),
+				},
+			)]),
+		);
+
+		let mut view = DataView::from_lily(&lily);
+		view.apply_client_scope(&lily, "b");
+		assert_eq!(view.variables["Client Full Name"], "Jordan Morgan");
+		assert_eq!(view.variables["Client Spouse Name"], "Alexandria Morgan");
+		assert_eq!(view.roles["FPOA Agent"][0].contact_ids, vec!["a"]);
 	}
 
 	#[test]
@@ -4760,6 +4902,58 @@ mod tests {
 			.iter()
 			.any(|line| line.kind == "added" && line.text == "Hello Jane Doe"));
 		discard_plan_candidate(report.candidate_path).expect("discard");
+		fs::remove_dir_all(&directory).ok();
+	}
+
+	#[test]
+	fn render_document_uses_the_document_client_scope() {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("clock")
+			.as_nanos();
+		let directory = std::env::temp_dir().join(format!("lily-client-scope-{}", unique));
+		let client_dir = directory.join("client");
+		fs::create_dir_all(&client_dir).expect("client directory");
+		let mut lily = LilyFile::default();
+		lily.variables
+			.insert("Client Full Name".into(), "Alexandria Morgan".into());
+		lily.co_client = Some(lily_file::ClientProfile {
+			first_name: "Jordan".into(),
+			last_name: "Morgan".into(),
+			..lily_file::ClientProfile::default()
+		});
+		lily.documents.insert(
+			"Will.docx".to_string(),
+			lily_file::DocumentMeta {
+				template_rel_path: "Will.docx".to_string(),
+				created_at: chrono::Utc::now(),
+				modified_at: chrono::Utc::now(),
+				variable_names: Vec::new(),
+				role_overrides: HashMap::new(),
+				variable_overrides: HashMap::new(),
+				client_key: Some("b".to_string()),
+				provenance: None,
+			},
+		);
+		lily_file::write_client_lily(&client_dir.to_string_lossy(), &lily).expect("lily");
+		let skeleton = directory.join("skeleton.docx");
+		write_minimal_docx(&skeleton, "Old text");
+		let document = client_dir.join("Will.docx");
+		fs::copy(&skeleton, &document).expect("document copy");
+		let plan_path = directory.join("plan.json");
+		fs::write(
+			&plan_path,
+			r#"{"lily_type":"document-plan","id":"client-scope","version":1,"layout":"skeleton.docx","blocks":[{"id":"block-000","kind":"paragraph","style":"Normal","content":[{"text":"Client: "},{"slot":"Client Full Name"}]}]}"#,
+		)
+		.expect("plan file");
+		render_plan_document(
+			document.to_string_lossy().to_string(),
+			plan_path.to_string_lossy().to_string(),
+			Some(skeleton.to_string_lossy().to_string()),
+		)
+		.expect("render");
+		let lines = crate::docx_ops::document_lines(&document).expect("lines");
+		assert!(lines.iter().any(|line| line == "Client: Jordan Morgan"));
 		fs::remove_dir_all(&directory).ok();
 	}
 

@@ -111,6 +111,7 @@ export default function ClientWorkflow({
 	const [selectedTemplates, setSelectedTemplates] = useState<Set<string>>(
 		new Set(),
 	);
+	const [draftingId, setDraftingId] = useState<string | null>(null);
 	const selectionDialogRef = useRef<HTMLDialogElement>(null);
 
 	const required = lilyFile.required_documents ?? [];
@@ -195,6 +196,29 @@ export default function ClientWorkflow({
 		},
 		[workingDir],
 	);
+	const draftRequired = useCallback(
+		async (document: RequiredDocument) => {
+			if (!workingDir || !templatesDir) return;
+			setDraftingId(document.id);
+			try {
+				const filename = await invoke<string>("draft_required_document", {
+					workingDir,
+					documentId: document.id,
+					templatesDir,
+				});
+				await reloadLilyFile();
+				onOpenDocument(filename, document.template_rel_path);
+			} catch (err) {
+				useToastStore
+					.getState()
+					.addToast("error", `Failed to draft document: ${String(err)}`);
+			} finally {
+				setDraftingId(null);
+			}
+		},
+		[workingDir, templatesDir, reloadLilyFile, onOpenDocument],
+	);
+
 	const engagement = required.find(
 		(document) => document.template_rel_path === ENGAGEMENT_LETTER,
 	);
@@ -253,14 +277,7 @@ export default function ClientWorkflow({
 				label: "Draft next document",
 				description:
 					"Draft the selected documents from the client data and plan library.",
-				action: () => {
-					if (templatesDir) {
-						void onAddMultipleDocuments(
-							[nextDraft.template_rel_path],
-							templatesDir,
-						);
-					}
-				},
+				action: () => void draftRequired(nextDraft),
 				disabled: !templatesDir,
 			};
 		}
@@ -303,6 +320,7 @@ export default function ClientWorkflow({
 		openSelection,
 		onStartAddDocument,
 		onAddMultipleDocuments,
+		draftRequired,
 		onOpenDocument,
 	]);
 
@@ -449,19 +467,18 @@ export default function ClientWorkflow({
 															"Waiting on per-client role assignments."
 														: (document.proposed_filename ?? "")
 												}
-												onClick={() => {
-													if (templatesDir) {
-														void onAddMultipleDocuments(
-															[document.template_rel_path],
-															templatesDir,
-														);
-													}
-												}}
+												onClick={() => void draftRequired(document)}
 												disabled={
-													!templatesDir || document.draft_ready === false
+													!templatesDir ||
+													document.draft_ready === false ||
+													draftingId === document.id
 												}
 											>
-												Draft
+												{draftingId === document.id ? (
+													<span className="loading loading-spinner loading-xs" />
+												) : (
+													"Draft"
+												)}
 											</button>
 										)}
 									</div>
