@@ -1410,6 +1410,132 @@ def command_review(args) -> None:
 		print(f"Markdown: {output_dir / 'review.md'}")
 
 
+def command_review_agent(args) -> None:
+	bundle = Path(args.bundle).expanduser().resolve()
+	review_json = bundle / "review.json"
+	review_md = bundle / "review.md"
+	if not review_json.is_file():
+		fail(f"review.json not found in bundle: {bundle}")
+	review = read_json(review_json)
+	candidate = review.get("candidate")
+	pages = review.get("layout", {}).get("images", [])
+	prompt_path = SCRIPT_DIR / "prompts" / "review-agent.md"
+	if not prompt_path.is_file():
+		fail(f"Reviewer prompt not found: {prompt_path}")
+	out_flags = bundle / "agent-flags.json"
+	out_summary = bundle / "agent-summary.md"
+	for old in (out_flags, out_summary):
+		if old.exists():
+			old.unlink()
+
+	lines = [
+		"",
+		"## This Review",
+		"",
+		f"- Bundle: {bundle}",
+		f"- review.json: {review_json}",
+		f"- review.md: {review_md}",
+		f"- candidate: {candidate}",
+		f"- plan: {review.get('plan', {}).get('path')}",
+		f"- client: {review.get('client')}",
+		f"- template: {review.get('template')}",
+		f"- reference: {review.get('reference') or 'none'}",
+	]
+	if pages:
+		lines.append("- page images:")
+		for page in pages:
+			lines.append(f"  - {page}")
+	else:
+		lines.append("- page images: none")
+	lines.extend(
+		[
+			"",
+			f"Write `{out_flags}` and `{out_summary}`.",
+		]
+	)
+	prompt = prompt_path.read_text().rstrip() + "\n" + "\n".join(lines) + "\n"
+
+	command = [
+		args.agent_command,
+		"run",
+		"--format",
+		"json",
+		"--auto",
+		"--title",
+		"Lily review agent",
+	]
+	if args.agent_model:
+		command.extend(["--model", args.agent_model])
+	command.append(prompt)
+	environment = os.environ.copy()
+	environment.update(
+		{
+			"LILY_REVIEW_DIR": str(bundle),
+			"LILY_REVIEW_JSON": str(review_json),
+			"LILY_REVIEW_MD": str(review_md),
+			"LILY_REVIEW_CANDIDATE": str(candidate or ""),
+			"LILY_REVIEW_PAGES": os.pathsep.join(str(page) for page in pages),
+		}
+	)
+	try:
+		result = subprocess.run(
+			command,
+			cwd=str(REPO_ROOT),
+			env=environment,
+			capture_output=True,
+			text=True,
+			timeout=args.timeout,
+		)
+	except FileNotFoundError:
+		fail(f"Drafting agent command not found: {args.agent_command}")
+	except subprocess.TimeoutExpired:
+		fail(f"Reviewer timed out after {args.timeout} seconds")
+	if result.returncode != 0:
+		detail = result.stderr.strip() or result.stdout.strip()
+		fail(
+			f"Reviewer exited with {result.returncode}"
+			+ (f":\n{detail}" if detail else "")
+		)
+	if not out_flags.is_file():
+		detail = result.stderr.strip() or result.stdout.strip()
+		fail(
+			"Reviewer did not write agent-flags.json"
+			+ (f"\n{detail}" if detail else "")
+		)
+	try:
+		flags = json.loads(out_flags.read_text(encoding="utf-8"))
+	except json.JSONDecodeError as error:
+		fail(f"agent-flags.json is not valid JSON: {error}")
+	if not isinstance(flags, list):
+		fail("agent-flags.json must be a JSON array")
+	summary = out_summary.read_text(encoding="utf-8") if out_summary.is_file() else ""
+	counts = {"error": 0, "warning": 0, "info": 0}
+	for flag in flags:
+		severity = flag.get("severity", "info") if isinstance(flag, dict) else "info"
+		if severity in counts:
+			counts[severity] += 1
+	if args.json:
+		print(
+			json.dumps(
+				{
+					"bundle": str(bundle),
+					"flags": flags,
+					"summary": summary,
+					"counts": counts,
+					"agent_summary": str(out_summary),
+				},
+				indent=2,
+			)
+		)
+	else:
+		print(f"Reviewer wrote {len(flags)} flag(s)")
+		print(
+			f"Errors: {counts['error']}, warnings: {counts['warning']}, infos: {counts['info']}"
+		)
+		print(f"Flags: {out_flags}")
+		print(f"Summary: {out_summary}")
+
+
 def command_layout(args) -> None:
 	docx_path = Path(args.docx).expanduser().resolve()
 	if not docx_path.is_file():
@@ -1577,6 +1703,27 @@ def build_parser() -> argparse.ArgumentParser:
 	review.add_argument("--dpi", type=int, default=110, help="Page image resolution")
 	review.add_argument("--json", action="store_true", help="Print the review summary as JSON")
 	review.set_defaults(func=command_review)
+
+	review_agent = subparsers.add_parser(
+		"review-agent",
+		help="Run the LLM reviewer over an existing review bundle",
+	)
+	review_agent.add_argument("--bundle", required=True, help="Review bundle directory")
+	review_agent.add_argument(
+		"--agent-command",
+		default=os.environ.get("LILY_AGENT_COMMAND", "opencode"),
+		help="Agent command to run (default: opencode or LILY_AGENT_COMMAND)",
+	)
+	review_agent.add_argument(
+		"--agent-model",
+		default=os.environ.get("LILY_AGENT_MODEL"),
+		help="Optional model override passed to the agent command",
+	)
+	review_agent.add_argument(
+		"--timeout", type=int, default=900, help="Reviewer timeout in seconds"
+	)
+	review_agent.add_argument("--json", action="store_true", help="Print the flags as JSON")
+	review_agent.set_defaults(func=command_review_agent)
 
 	layout = subparsers.add_parser(
 		"layout", help="Render a document to PDF pages for layout review"

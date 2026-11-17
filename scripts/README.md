@@ -42,6 +42,9 @@ scripts/lily review --plan "/path/to/plan.json" --client-dir "/path/to/client" \
   --output-dir ".tmp/draft/review" \
   --reference "/path/to/as-drafted.docx" --json
 
+# Run the LLM reviewer over an existing review bundle
+scripts/lily review-agent --bundle ".tmp/draft/review" --json
+
 # Check the environment
 scripts/lily doctor
 scripts/lily doctor --strict
@@ -58,6 +61,7 @@ scripts/lily doctor --strict
 - `LILY_RENDER_BIN` overrides the `lily-render` path. The default is `target/debug/lily-render` at the repository root.
 - `LILY_TEMPLATES` overrides the template library path. The default is `~/Carelaw/carelaw-lily/Templates`.
 - `review` also needs `pdftotext` for page text statistics; `layout` and `review` need LibreOffice and `pdftoppm`.
+- `review-agent` runs `opencode` by default, or `LILY_AGENT_COMMAND`, and writes `agent-flags.json` and `agent-summary.md` into the bundle.
 
 Build the renderer before using `plan render`, `draft`, `review`, or `doctor --strict`:
 
