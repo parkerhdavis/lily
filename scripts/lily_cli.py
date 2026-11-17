@@ -590,29 +590,57 @@ def expand_excerpts(
 	return expanded
 
 
-def collect_plan_references(plan: dict) -> dict:
+def collect_plan_references(
+	plan: dict,
+	variables: dict | None = None,
+	lists: dict | None = None,
+	roles: dict[str, list[str]] | None = None,
+) -> dict:
+	variables = variables or {}
+	lists = lists or {}
+	roles = roles or {}
 	slots: list[str] = []
-	roles: set[str] = set()
+	role_names: set[str] = set()
 	clause_refs: set[str] = set()
 	terms: set[str] = set()
 	refs: list[str] = []
 	conditions: list[tuple[str, object]] = []
+	visited_clauses: set[str] = set()
+
+	def enabled(condition) -> bool:
+		if condition is None:
+			return True
+		return evaluate_condition(condition, variables, lists, roles) is not False
 
 	def visit(node, where: str) -> None:
 		if isinstance(node, dict):
+			condition = node.get("when")
+			if condition is not None:
+				conditions.append((where, condition))
+				if not enabled(condition):
+					return
+			clause_id = node.get("clause")
+			if isinstance(clause_id, str):
+				clause_refs.add(clause_id)
+				definition = plan.get("clauses", {}).get(clause_id)
+				if definition is not None and clause_id not in visited_clauses:
+					clause_condition = definition.get("when")
+					if clause_condition is not None:
+						conditions.append((f"clause:{clause_id}", clause_condition))
+					if enabled(clause_condition):
+						visited_clauses.add(clause_id)
+						visit(definition.get("body", []), f"clause:{clause_id}")
 			if isinstance(node.get("slot"), str):
 				slots.append(node["slot"])
 			if isinstance(node.get("role"), str):
-				roles.add(node["role"])
-			if isinstance(node.get("clause"), str):
-				clause_refs.add(node["clause"])
+				role_names.add(node["role"])
 			if isinstance(node.get("term"), str):
 				terms.add(node["term"])
 			if isinstance(node.get("ref"), str):
 				refs.append(node["ref"])
-			if node.get("when") is not None:
-				conditions.append((where, node["when"]))
-			for value in node.values():
+			for key, value in node.items():
+				if key in ("when", "clause"):
+					continue
 				visit(value, where)
 		elif isinstance(node, list):
 			for value in node:
@@ -620,16 +648,15 @@ def collect_plan_references(plan: dict) -> dict:
 
 	for block in plan.get("blocks", []):
 		block_id = block.get("id", "?")
+		condition = block.get("when")
+		if condition is not None:
+			conditions.append((block_id, condition))
+			if not enabled(condition):
+				continue
 		visit(block.get("content", []), block_id)
-		if block.get("when") is not None:
-			conditions.append((block_id, block["when"]))
-	for clause_id, clause in plan.get("clauses", {}).items():
-		visit(clause.get("body", []), f"clause:{clause_id}")
-		if clause.get("when") is not None:
-			conditions.append((f"clause:{clause_id}", clause["when"]))
 	return {
 		"slots": slots,
-		"roles": sorted(roles),
+		"roles": sorted(role_names),
 		"clause_refs": sorted(clause_refs),
 		"terms": sorted(terms),
 		"refs": refs,
@@ -732,7 +759,7 @@ def client_role_names(client: dict) -> dict[str, list[str]]:
 
 
 def audit_plan(plan: dict, variables: dict, lists: dict, roles: dict[str, list[str]] | None = None) -> dict:
-	references = collect_plan_references(plan)
+	references = collect_plan_references(plan, variables, lists, roles)
 	roles = roles or {}
 	missing_roles = [role for role in references["roles"] if not roles.get(role)]
 	declared = plan.get("slots", {})
