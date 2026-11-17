@@ -1724,9 +1724,14 @@ fn required_documents(
 		}
 	}
 	if trust {
-		let name = a
-			.map(|client| format!("{} {}", client.first_name, client.last_name))
-			.unwrap_or_default();
+		let name = match (a, b, joint) {
+			(Some(a), Some(b), true) => format!(
+				"{} {} and {} {}",
+				a.first_name, a.last_name, b.first_name, b.last_name
+			),
+			(Some(a), _, _) => format!("{} {}", a.first_name, a.last_name),
+			_ => String::new(),
+		};
 		documents.push(required_document(
 			TRUST_TEMPLATE,
 			"Trust Agreement",

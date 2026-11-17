@@ -34,6 +34,17 @@ const STATUS_LABELS: Record<DocumentStatus, string> = {
 	executed: "Executed",
 };
 
+/** The per-client name a proposed document will receive, falling back to the
+ *  source template for entries that predate the proposed-filename field. */
+function documentLabel(document: RequiredDocument): string {
+	const raw =
+		document.document_filename ??
+		document.proposed_filename ??
+		document.template_rel_path.split("/").pop() ??
+		"";
+	return raw.replace(/\.docx$/i, "");
+}
+
 function statusBadge(status: DocumentStatus): string {
 	switch (status) {
 		case "executed":
@@ -328,23 +339,28 @@ export default function ClientWorkflow({
 		<>
 			<div className="rounded-xl border border-base-300 bg-base-100 shadow-[0_4px_16px_rgba(0,0,0,0.25)] p-5">
 				<div className="flex flex-wrap items-start justify-between gap-3">
-					<div>
+					<div className="min-w-0 flex-1">
 						<div className="font-semibold text-base">Engagement</div>
 						<p className="text-sm text-base-content/50 mt-0.5">
 							{next.description}
 						</p>
 					</div>
-					<div className="flex flex-wrap items-center justify-end gap-2">
-						<button
-							type="button"
-							className="btn btn-ghost btn-xs"
-							onClick={openSelection}
-						>
-							Select documents
-						</button>
-						<span className="text-xs text-base-content/40">Waiting on</span>
+					<button
+						type="button"
+						className="btn btn-ghost btn-xs shrink-0"
+						onClick={openSelection}
+					>
+						Select documents
+					</button>
+				</div>
+
+				<div className="mt-4 flex flex-wrap items-end gap-4 border-t border-base-300 pt-3">
+					<label className="flex flex-col gap-1">
+						<span className="text-[11px] font-medium uppercase tracking-wide text-base-content/40">
+							Waiting on
+						</span>
 						<select
-							className="select select-bordered select-sm"
+							className="select select-bordered select-sm w-36"
 							value={lilyFile.workflow_waiting_on ?? "none"}
 							onChange={(event) =>
 								void setWorkflowWaitingOn(
@@ -356,9 +372,13 @@ export default function ClientWorkflow({
 							<option value="attorney">Attorney</option>
 							<option value="client">Client</option>
 						</select>
-						<span className="text-xs text-base-content/40">Stage</span>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-[11px] font-medium uppercase tracking-wide text-base-content/40">
+							Stage
+						</span>
 						<select
-							className="select select-bordered select-sm"
+							className="select select-bordered select-sm w-44"
 							value={lilyFile.workflow_stage ?? "intake"}
 							onChange={(event) =>
 								void setWorkflowStage(event.target.value as WorkflowStage)
@@ -370,20 +390,20 @@ export default function ClientWorkflow({
 								</option>
 							))}
 						</select>
-						{lilyFile.workflow_stage !== suggested && (
-							<button
-								type="button"
-								className="btn btn-ghost btn-xs"
-								onClick={() => void setWorkflowStage(suggested)}
-								title={`Set the stage to ${suggested}`}
-							>
-								Use suggested
-							</button>
-						)}
-					</div>
+					</label>
+					{lilyFile.workflow_stage !== suggested && (
+						<button
+							type="button"
+							className="btn btn-ghost btn-xs mb-1"
+							onClick={() => void setWorkflowStage(suggested)}
+							title={`Set the stage to ${suggested}`}
+						>
+							Use suggested
+						</button>
+					)}
 				</div>
 
-				<div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-3">
+				<div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-base-300 pt-3">
 					<div className="text-xs text-base-content/50">
 						{required.length} selected ·{" "}
 						{
@@ -416,8 +436,11 @@ export default function ClientWorkflow({
 									key={document.id}
 									className="flex items-center justify-between gap-2 rounded-lg bg-base-200/40 px-2 py-1.5 text-xs"
 								>
-									<span className="min-w-0 truncate">
-										{document.template_rel_path.replace(/^.*\//, "")}
+									<span
+										className="min-w-0 truncate"
+										title={document.template_rel_path}
+									>
+										{documentLabel(document)}
 									</span>
 									<div className="flex shrink-0 items-center gap-1">
 										<span
@@ -457,7 +480,8 @@ export default function ClientWorkflow({
 											>
 												Open
 											</button>
-										) : (
+										) : document.status === "complete" ||
+											document.status === "executed" ? null : (
 											<button
 												type="button"
 												className="btn btn-ghost btn-xs"
