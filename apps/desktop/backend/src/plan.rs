@@ -29,13 +29,8 @@ static CAPS_PROPERTY_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 /// Clause IDs and versions that contributed text to a render.
 pub type ClauseUsage = BTreeMap<String, u32>;
 
-static SDT_RE: LazyLock<regex::Regex> =
-	LazyLock::new(|| regex::Regex::new(r"(?s)<w:sdt>.*?</w:sdt>").expect("valid sdt regex"));
-static TAG_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-	regex::Regex::new(r#"<w:tag w:val="lily:([^"]+)"/>"#).expect("valid tag regex")
-});
-static T_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-	regex::Regex::new(r"(?s)(<w:t(?:\s[^>]*)?>)(.*?)(</w:t>)").expect("valid text regex")
+static PLACEHOLDER_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"\{([^{}]+)\}").expect("valid placeholder regex")
 });
 
 fn default_lily_type() -> String {
@@ -2578,37 +2573,22 @@ pub fn replace_body(document_xml: &str, body_xml: &str) -> Result<String, String
 	))
 }
 
-/// Replace simple `lily:` SDTs in headers and footers. Conditional SDTs are
-/// left for the plan renderer; the skeleton's headers and footers are fixed
-/// layout, not plan content.
-pub fn replace_simple_sdts(xml: &str, data: &DataView, warnings: &mut Vec<String>) -> String {
-	SDT_RE
+/// Replace `{Slot Name}` placeholders in headers and footers with the
+/// client value. The surrounding run keeps its formatting, so a caps run
+/// still renders the name in capitals.
+pub fn replace_header_footer_slots(
+	xml: &str,
+	data: &DataView,
+	warnings: &mut Vec<String>,
+) -> String {
+	PLACEHOLDER_RE
 		.replace_all(xml, |captures: &regex::Captures| {
-			let block = captures.get(0).expect("whole match").as_str();
-			let Some(tag_captures) = TAG_RE.captures(block) else {
-				return block.to_string();
-			};
-			let name = &tag_captures[1];
+			let name = captures.get(1).expect("name match").as_str();
 			let value = data.get(name).unwrap_or("");
 			if value.is_empty() {
 				warnings.push(format!("Missing value for header or footer slot: {}", name));
 			}
-			if let Some(text_captures) = T_RE.captures(block) {
-				let whole = text_captures.get(0).expect("text match");
-				let mut result = block.to_string();
-				result.replace_range(
-					whole.start()..whole.end(),
-					&format!(
-						"{}{}{}",
-						&text_captures[1],
-						escape_xml(value),
-						&text_captures[3]
-					),
-				);
-				result
-			} else {
-				block.to_string()
-			}
+			escape_xml(value)
 		})
 		.to_string()
 }
@@ -3117,7 +3097,7 @@ pub fn render_plan(
 			output_entries.push((name, replaced.into_bytes()));
 		} else if name.starts_with("word/header") || name.starts_with("word/footer") {
 			let xml = String::from_utf8_lossy(&bytes);
-			let replaced = replace_simple_sdts(&xml, &view, &mut warnings);
+			let replaced = replace_header_footer_slots(&xml, &view, &mut warnings);
 			output_entries.push((name, replaced.into_bytes()));
 		} else {
 			output_entries.push((name, bytes));
@@ -4057,13 +4037,12 @@ mod tests {
 	}
 
 	#[test]
-	fn replace_simple_sdt_in_footer() {
-		let footer = r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="lily:Client Full Name"/></w:sdtPr><w:sdtContent><w:r><w:t>Client Full Name</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+	fn replace_header_footer_placeholders() {
+		let footer = r#"<w:p><w:r><w:t>{Client Full Name}</w:t></w:r></w:p>"#;
 		let mut warnings = Vec::new();
-		let result = replace_simple_sdts(footer, &view(), &mut warnings);
+		let result = replace_header_footer_slots(footer, &view(), &mut warnings);
 		assert!(result.contains("Jane A. Doe"));
-		assert!(!result.contains("<w:t>Client Full Name</w:t>"));
-		assert!(result.contains(r#"<w:tag w:val="lily:Client Full Name"/>"#));
+		assert!(!result.contains("{Client Full Name}"));
 		assert!(warnings.is_empty());
 	}
 
