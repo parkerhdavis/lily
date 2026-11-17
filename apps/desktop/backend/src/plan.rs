@@ -273,6 +273,8 @@ pub enum ContentNode {
 	},
 	Tab {
 		tab: bool,
+		#[serde(default)]
+		marks: Vec<String>,
 	},
 	LineBreak {
 		#[serde(rename = "line_break")]
@@ -1339,12 +1341,15 @@ fn render_content(
 					number, current_block
 				)),
 			},
-			ContentNode::Tab { tab } => {
+			ContentNode::Tab { tab, marks } => {
 				if *tab {
-					let properties = formatting
-						.map(|source| source.rpr.as_str())
-						.unwrap_or("");
-					if properties.is_empty() {
+					let properties = merge_marks(
+						formatting
+							.map(|source| source.rpr.as_str())
+							.unwrap_or(""),
+						marks,
+					);
+					if properties.is_empty() || properties == "<w:rPr/>" {
 						output.push_str("<w:r><w:tab/></w:r>");
 					} else {
 						output.push_str(&format!("<w:r>{}<w:tab/></w:r>", properties));
@@ -1519,7 +1524,7 @@ fn render_table(
 #[derive(Debug, Clone)]
 enum Segment {
 	Text { text: String, marks: Vec<String> },
-	Tab,
+	Tab { marks: Vec<String> },
 	Break { page: bool },
 }
 
@@ -1724,6 +1729,7 @@ fn run_at(run_of: &[usize], position: usize) -> usize {
 fn segment_marks(segment: &Segment) -> Vec<String> {
 	match segment {
 		Segment::Text { marks, .. } => marks.clone(),
+		Segment::Tab { marks } => marks.clone(),
 		_ => Vec::new(),
 	}
 }
@@ -1774,7 +1780,7 @@ fn segment_body(segments: &[Segment]) -> String {
 				"<w:t xml:space=\"preserve\">{}</w:t>",
 				escape_xml(text)
 			)),
-			Segment::Tab => body.push_str("<w:tab/>"),
+			Segment::Tab { .. } => body.push_str("<w:tab/>"),
 			Segment::Break { page } => {
 				if *page {
 					body.push_str("<w:br w:type=\"page\"/>");
@@ -1949,9 +1955,11 @@ fn resolve_segments(
 					));
 				}
 			}
-			ContentNode::Tab { tab } => {
+			ContentNode::Tab { tab, marks } => {
 				if *tab {
-					segments.push(Segment::Tab);
+					segments.push(Segment::Tab {
+						marks: marks.clone(),
+					});
 				}
 			}
 			ContentNode::LineBreak { line_break, page } => {
@@ -2037,7 +2045,7 @@ fn edit_paragraph(
 				}
 				None => assignments.push((run_at(&run_of, cursor), segment.clone())),
 			},
-			Segment::Tab => {
+			Segment::Tab { marks } => {
 				let run = match (cursor..items.len()).find(|index| items[*index] == SourceItem::Tab) {
 					Some(position) => {
 						cursor = position + 1;
@@ -2045,7 +2053,12 @@ fn edit_paragraph(
 					}
 					None => run_at(&run_of, cursor),
 				};
-				assignments.push((run, Segment::Tab));
+				assignments.push((
+					run,
+					Segment::Tab {
+						marks: marks.clone(),
+					},
+				));
 			}
 			Segment::Break { page } => {
 				let run = match (cursor..items.len()).find(|index| {
@@ -4369,8 +4382,14 @@ mod tests {
 			kind: "paragraph".to_string(),
 			style: String::new(),
 			content: vec![
-				ContentNode::Tab { tab: true },
-				ContentNode::Tab { tab: true },
+				ContentNode::Tab {
+					tab: true,
+					marks: Vec::new(),
+				},
+				ContentNode::Tab {
+					tab: true,
+					marks: Vec::new(),
+				},
 				text_node("Hello world"),
 			],
 			when: None,
@@ -4399,6 +4418,81 @@ mod tests {
 		assert!(
 			!text_run.contains("<w:u "),
 			"text inherited the blank's underline: {edited}"
+		);
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn tab_marks_underline_the_blank_in_place() {
+		let document = r#"<w:document><w:body><w:p><w:r><w:t xml:space="preserve">Signed on </w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>, 2026.</w:t></w:r></w:p><w:sectPr/></w:body></w:document>"#;
+		let block = Block {
+			id: "block-000".to_string(),
+			kind: "paragraph".to_string(),
+			style: String::new(),
+			content: vec![
+				text_node("Signed on "),
+				ContentNode::Tab {
+					tab: true,
+					marks: vec!["underline".to_string()],
+				},
+				text_node(", 2026."),
+			],
+			when: None,
+			numbering: None,
+			source_paragraph: Some(0),
+			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
+			path: None,
+			rows: vec![],
+		};
+		let mut warnings = Vec::new();
+		let (edited, _) =
+			edit_body(document, &test_plan(vec![block]), &view(), &[], &mut warnings, &mut ClauseUsage::new())
+				.unwrap()
+				.expect("body is editable");
+		assert!(
+			edited.contains("<w:rPr><w:u w:val=\"single\"/></w:rPr><w:tab/>"),
+			"tab lost its underline: {edited}"
+		);
+		assert!(warnings.is_empty());
+	}
+
+	#[test]
+	fn tab_marks_underline_the_blank_when_rebuilt() {
+		let block = Block {
+			id: "block-000".to_string(),
+			kind: "paragraph".to_string(),
+			style: String::new(),
+			content: vec![
+				text_node("Signed on "),
+				ContentNode::Tab {
+					tab: true,
+					marks: vec!["underline".to_string()],
+				},
+				text_node(", 2026."),
+			],
+			when: None,
+			numbering: None,
+			source_paragraph: None,
+			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
+			path: None,
+			rows: vec![],
+		};
+		let source = SourceFormatting {
+			ppr: String::new(),
+			rpr: "<w:rPr/>".to_string(),
+		};
+		let mut warnings = Vec::new();
+		let (body, _) =
+			render_body(&test_plan(vec![block]), &view(), &[source], &mut warnings).unwrap();
+		assert!(
+			body.contains("<w:rPr><w:u w:val=\"single\"/></w:rPr><w:tab/>"),
+			"tab lost its underline: {body}"
 		);
 		assert!(warnings.is_empty());
 	}
