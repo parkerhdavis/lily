@@ -20,6 +20,12 @@ use crate::history::VersionDiffLine;
 use crate::lily_file::{self, Contact, LilyFile, RoleAssignment};
 use crate::provenance::{self, DraftProvenance};
 
+/// Caps and small caps are content, not layout: a role's generated suffix
+/// must not inherit the source template's name-run case formatting.
+static CAPS_PROPERTY_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+	regex::Regex::new(r"(?s)<w:(?:caps|smallCaps)\b[^>]*/>").expect("valid caps regex")
+});
+
 /// Clause IDs and versions that contributed text to a render.
 pub type ClauseUsage = BTreeMap<String, u32>;
 
@@ -909,35 +915,16 @@ fn render_run(text: &str, marks: &[String], run_properties: Option<&str>) -> Str
 	if text.is_empty() {
 		return String::new();
 	}
-	if let Some(properties) = run_properties {
-		if !properties.is_empty() {
-			return format!(
-				"<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>",
-				properties,
-				escape_xml(text)
-			);
-		}
-	}
-	let mut properties = String::new();
-	for mark in marks {
-		match mark.as_str() {
-			"bold" => properties.push_str("<w:b/>"),
-			"italic" => properties.push_str("<w:i/>"),
-			"underline" => properties.push_str("<w:u w:val=\"single\"/>"),
-			"small_caps" => properties.push_str("<w:smallCaps/>"),
-			"caps" => properties.push_str("<w:caps/>"),
-			_ => {}
-		}
-	}
-	if properties.is_empty() {
+	let merged = merge_marks(run_properties.unwrap_or(""), marks);
+	if merged.is_empty() || merged == "<w:rPr/>" {
 		format!(
 			"<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
 			escape_xml(text)
 		)
 	} else {
 		format!(
-			"<w:r><w:rPr>{}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-			properties,
+			"<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>",
+			merged,
 			escape_xml(text)
 		)
 	}
@@ -1277,9 +1264,11 @@ fn render_content(
 					data,
 					warnings,
 				);
+				let mut role_marks = marks.clone();
+				role_marks.push("strip_caps".to_string());
 				output.push_str(&render_run(
 					&text,
-					marks,
+					&role_marks,
 					formatting.map(|source| source.rpr.as_str()),
 				));
 			}
@@ -1742,6 +1731,11 @@ fn segment_marks(segment: &Segment) -> Vec<String> {
 type RunGroups = HashMap<usize, Vec<(Vec<String>, Vec<Segment>)>>;
 
 fn merge_marks(rpr: &str, marks: &[String]) -> String {
+	let base = if marks.iter().any(|mark| mark == "strip_caps") {
+		CAPS_PROPERTY_RE.replace_all(rpr, "").to_string()
+	} else {
+		rpr.to_string()
+	};
 	let mut additions = String::new();
 	for mark in marks {
 		let (needle, xml) = match mark.as_str() {
@@ -1752,23 +1746,23 @@ fn merge_marks(rpr: &str, marks: &[String]) -> String {
 			"caps" => ("<w:caps", "<w:caps/>"),
 			_ => continue,
 		};
-		if !rpr.contains(needle) && !additions.contains(needle) {
+		if !base.contains(needle) && !additions.contains(needle) {
 			additions.push_str(xml);
 		}
 	}
 	if additions.is_empty() {
-		return rpr.to_string();
+		return base;
 	}
-	if rpr.is_empty() || rpr == "<w:rPr/>" {
+	if base.is_empty() || base == "<w:rPr/>" {
 		return format!("<w:rPr>{}</w:rPr>", additions);
 	}
-	match rpr.rfind("</w:rPr>") {
+	match base.rfind("</w:rPr>") {
 		Some(position) => {
-			let mut merged = rpr.to_string();
+			let mut merged = base;
 			merged.insert_str(position, &additions);
 			merged
 		}
-		None => rpr.to_string(),
+		None => base,
 	}
 }
 
@@ -1886,9 +1880,11 @@ fn resolve_segments(
 					data,
 					warnings,
 				);
+				let mut role_marks = marks.clone();
+				role_marks.push("strip_caps".to_string());
 				segments.push(Segment::Text {
 					text,
-					marks: marks.clone(),
+					marks: role_marks,
 				});
 			}
 			ContentNode::Clause { clause, when } => {
@@ -2685,6 +2681,7 @@ fn condition_names(condition: &Value, names: &mut Vec<String>) {
 fn collect_audit_nodes(
     plan: &DocumentPlan,
     nodes: &[ContentNode],
+    data: &DataView,
     location: &str,
     used_slots: &mut Vec<String>,
     terms: &mut Vec<String>,
@@ -2703,29 +2700,40 @@ fn collect_audit_nodes(
             ContentNode::Clause { clause, when } => {
                 if let Some(condition) = when {
                     conditions.push((location.to_string(), condition.clone()));
+                    if !eval_condition(condition, data).unwrap_or(true) {
+                        continue;
+                    }
+                }
+                let Some(definition) = plan.clauses.get(clause) else {
+                    continue;
+                };
+                if let Some(condition) = &definition.when {
+                    conditions.push((format!("clause:{}", clause), condition.clone()));
+                    if !eval_condition(condition, data).unwrap_or(true) {
+                        continue;
+                    }
                 }
                 if visited_clauses.insert(clause.clone()) {
-                    if let Some(definition) = plan.clauses.get(clause) {
-                        if let Some(condition) = &definition.when {
-                            conditions.push((format!("clause:{}", clause), condition.clone()));
-                        }
-                        collect_audit_nodes(
-                            plan,
-                            &definition.body,
-                            &format!("clause:{}", clause),
-                            used_slots,
-                            terms,
-                            refs,
-                            roles,
-                            conditions,
-                            visited_clauses,
-                        );
-                    }
+                    collect_audit_nodes(
+                        plan,
+                        &definition.body,
+                        data,
+                        &format!("clause:{}", clause),
+                        used_slots,
+                        terms,
+                        refs,
+                        roles,
+                        conditions,
+                        visited_clauses,
+                    );
                 }
             }
             ContentNode::Role { role, when, .. } => {
                 if let Some(condition) = when {
                     conditions.push((location.to_string(), condition.clone()));
+                    if !eval_condition(condition, data).unwrap_or(true) {
+                        continue;
+                    }
                 }
                 if !roles.contains(role) {
                     roles.push(role.clone());
@@ -2756,10 +2764,14 @@ pub fn audit_plan(plan: &DocumentPlan, data: &DataView) -> PlanAudit {
     for block in &plan.blocks {
         if let Some(condition) = &block.when {
             conditions.push((block.id.clone(), condition.clone()));
+            if !eval_condition(condition, data).unwrap_or(true) {
+                continue;
+            }
         }
         collect_audit_nodes(
             plan,
             &block.content,
+            data,
             &block.id,
             &mut used_slots,
             &mut terms,
@@ -3718,6 +3730,63 @@ mod tests {
 		assert!(eval_condition(&json!({"eq": ["has_spouse", true]}), &view()).unwrap());
 		assert!(!eval_condition(&json!({"eq": ["has_spouse", false]}), &view()).unwrap());
 		assert!(eval_condition(&json!({"eq": ["Has Spouse", "true"]}), &view()).unwrap());
+	}
+
+	#[test]
+	fn role_runs_strip_source_caps_from_the_suffix() {
+		let merged = merge_marks(
+			"<w:rPr><w:caps/></w:rPr>",
+			&["strip_caps".to_string()],
+		);
+		assert!(!merged.contains("<w:caps"));
+		let run = render_run(
+			"DAWN MARTINEZ, who can be reached at 720-231-6609, as my Agent.",
+			&["strip_caps".to_string()],
+			Some("<w:rPr><w:caps/></w:rPr>"),
+		);
+		assert!(!run.contains("<w:caps"));
+		assert!(run.contains("as my Agent."));
+	}
+
+	#[test]
+	fn audit_skips_roles_in_inactive_conditions() {
+		let block = Block {
+			id: "block-000".to_string(),
+			kind: "paragraph".to_string(),
+			style: "Normal".to_string(),
+			content: vec![ContentNode::Role {
+				role: "Guardian".to_string(),
+				when: Some(json!({"eq": ["Has Minor Children", true]})),
+				property: None,
+				intro: Some("{names_upper}".to_string()),
+				shared_intro: None,
+				successor: None,
+				shared_successor: None,
+				conjunction: None,
+				separator: None,
+				oxford: None,
+				marks: vec![],
+			}],
+			when: None,
+			numbering: None,
+			source_paragraph: None,
+			list: None,
+			keep_with_next: false,
+			page_break_before: false,
+			keep_together: false,
+			path: None,
+			rows: vec![],
+		};
+		let plan = test_plan(vec![block]);
+		let mut data = DataView::default();
+		data.variables
+			.insert("Has Minor Children".to_string(), "false".to_string());
+		let inactive = audit_plan(&plan, &data);
+		assert!(inactive.missing_roles.is_empty());
+		data.variables
+			.insert("Has Minor Children".to_string(), "true".to_string());
+		let active = audit_plan(&plan, &data);
+		assert_eq!(active.missing_roles, vec!["Guardian".to_string()]);
 	}
 
 	#[test]
