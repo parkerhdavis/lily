@@ -2,16 +2,9 @@
 import { useCallback, useEffect, useRef } from "react";
 
 const shortcuts = [
-	{ section: "Document Editing" },
-	{ keys: "Ctrl+S", action: "Save document" },
-	{ keys: "Ctrl+Z", action: "Undo" },
-	{ keys: "Ctrl+Y", action: "Redo" },
-	{ keys: "Ctrl+Shift+Z", action: "Redo (alternate)" },
 	{ section: "Navigation" },
 	{ keys: "Alt+\u2190", action: "Go back" },
 	{ keys: "Alt+\u2192", action: "Go forward" },
-	{ section: "Search" },
-	{ keys: "Ctrl+F", action: "Search variables" },
 	{ section: "View" },
 	{ keys: "Ctrl++", action: "Zoom in" },
 	{ keys: "Ctrl+\u2013", action: "Zoom out" },

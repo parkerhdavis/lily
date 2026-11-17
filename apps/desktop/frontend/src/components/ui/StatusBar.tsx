@@ -273,8 +273,6 @@ function getStepLabel(step: string, workingDir: string | null): string {
 			return folderName ? `Clients \u203A ${folderName}` : "Clients";
 		case "select-template":
 			return `${folderName} \u203A Add Document`;
-		case "edit-variables":
-			return `${folderName} \u203A Edit Document`;
 		case "app-settings":
 			return "Settings";
 		case "pipeline":

@@ -52,8 +52,6 @@ export function navLabel(
 			return folderName ? `Clients \u203A ${folderName}` : "Clients";
 		case "select-template":
 			return `${folderName} \u203A Add Document`;
-		case "edit-variables":
-			return `${folderName} \u203A Edit Document`;
 		case "app-settings":
 			return "Settings";
 		case "pipeline":
@@ -68,8 +66,8 @@ export function pushNav(state: WorkflowState) {
 	const entry = {
 		step: state.step,
 		workingDir: state.workingDir,
-		documentPath: state.documentPath,
-		templateRelPath: state.templateRelPath,
+		documentPath: null,
+		templateRelPath: null,
 		label: navLabel(state.step, state.workingDir),
 	};
 	useNavigationStore.getState().push(entry);
@@ -157,80 +155,4 @@ export async function loadTemplateVariables(
 	} catch {
 		return [];
 	}
-}
-
-/**
- * Merge extracted variables with stored variable names from the .lily file.
- *
- * Handles two problems that arise when a conditional was saved as false and
- * its true-branch contained nested variables:
- *   1. The nested variables are missing from `load_template_variables`
- *      output because the plan schema omits a slot that an older
- *      document still references.
- *   2. Even when re-added, they need correct contact-role dot-notation
- *      variants so the UI recognises them as contact-role fields.
- *
- * Returns a merged list in `storedNames` order (original document order),
- * using the richer extracted VariableInfo where available and reconstructing
- * entries for any that are missing.
- */
-export function mergeStoredVariables(
-	extracted: VariableInfo[],
-	filename: string,
-	lilyFile: LilyFile | null,
-): VariableInfo[] {
-	const storedNames = lilyFile?.documents[filename]?.variable_names ?? [];
-	if (storedNames.length === 0) return extracted;
-
-	// Build reverse lookup: display_name → dot-notation variant from contact bindings
-	const bindingLookup: Record<string, string> = {};
-	for (const [role, binding] of Object.entries(
-		lilyFile?.contact_bindings ?? {},
-	)) {
-		for (const [displayName, property] of Object.entries(
-			binding.variable_mappings,
-		)) {
-			bindingLookup[displayName] = `${role}.${property}`;
-		}
-	}
-
-	// Previously also scanned conditional_definitions for dot-notation refs,
-	// but conditional definitions now live in the template schema.
-	// Contact bindings cover the same lookup when contacts are assigned.
-	const nestedDotLookup: Record<string, string> = {};
-
-	// Index extracted variables by display name
-	const extractedMap = new Map<string, VariableInfo>();
-	for (const v of extracted) {
-		extractedMap.set(v.display_name, v);
-	}
-
-	// Rebuild in storedNames order, supplementing missing entries
-	const merged: VariableInfo[] = [];
-	const seen = new Set<string>();
-	for (const name of storedNames) {
-		seen.add(name);
-		const existing = extractedMap.get(name);
-		if (existing) {
-			merged.push(existing);
-		} else {
-			// Reconstruct dot-notation variant from bindings or conditional defs
-			const dotVariant = bindingLookup[name] ?? nestedDotLookup[name];
-			const variants = dotVariant ? [dotVariant] : [name];
-			merged.push({
-				display_name: name,
-				variants,
-				is_conditional: false,
-			});
-		}
-	}
-
-	// Append any extracted variables not in storedNames (e.g. manually added)
-	for (const v of extracted) {
-		if (!seen.has(v.display_name)) {
-			merged.push(v);
-		}
-	}
-
-	return merged;
 }

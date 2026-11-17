@@ -91,7 +91,6 @@ export type WorkflowStep =
 	| "hub"
 	| "clients"
 	| "select-template"
-	| "edit-variables"
 	| "app-settings"
 	| "pipeline";
 

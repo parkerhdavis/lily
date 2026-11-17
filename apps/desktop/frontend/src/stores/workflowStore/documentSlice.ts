@@ -1,59 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useUndoStore } from "@/stores/undoStore";
 import type { LilyFile, VariableSchema } from "@/types";
-import { extractFilename } from "@/utils/path";
 import {
 	buildDocumentFilename,
 	loadTemplateVariables,
-	mergeStoredVariables,
 	pushNav,
 	resolveContactVariables,
 	toastError,
 	toastSuccess,
 } from "./helpers";
 import type { WorkflowSlice } from "./types";
-
-const CO_CLIENT_VARIABLES = [
-	"Client First Name",
-	"Client Middle Name",
-	"Client Last Name",
-	"Client Full Name",
-	"Client Address",
-	"Client City",
-	"Client State",
-	"Client Zip",
-	"Client County",
-	"Client Phone",
-	"Client Email",
-	"Client Spouse Name",
-];
-
-/** Show the second client's identity when editing a document that belongs to
- *  the co-client in a joint matter. The renderer does the same swap from
- *  `co_client`; this keeps the editor in step with the rendered document. */
-function applyCoClientValues(
-	lilyFile: LilyFile,
-	values: Record<string, string>,
-): void {
-	const co = lilyFile.co_client;
-	if (!co) return;
-	values["Client First Name"] = co.first_name;
-	values["Client Middle Name"] = co.middle_name;
-	values["Client Last Name"] = co.last_name;
-	values["Client Full Name"] = [co.first_name, co.last_name]
-		.filter(Boolean)
-		.join(" ");
-	values["Client Address"] = co.address;
-	values["Client City"] = co.city;
-	values["Client State"] = co.state;
-	values["Client Zip"] = co.zip;
-	values["Client County"] = co.county;
-	values["Client Phone"] = co.phone;
-	values["Client Email"] = co.email;
-	values["Client Spouse Name"] = lilyFile.variables["Client Full Name"] ?? "";
-}
 
 function planPathFor(
 	templatesDir: string,
@@ -245,284 +202,41 @@ export const createDocumentSlice: WorkflowSlice = (set, get) => ({
 		set({ loading: true, error: null });
 		try {
 			const docPath = `${workingDir}/${filename}`;
-
-			const templatesDir = useSettingsStore.getState().settings.templates_dir;
+			const settings = useSettingsStore.getState().settings;
 			const docTemplateRelPath =
 				templateRelPath ?? lilyFile?.documents[filename]?.template_rel_path;
-			let variables =
-				templatesDir && docTemplateRelPath
-					? await loadTemplateVariables(templatesDir, docTemplateRelPath)
-					: [];
-
-			// Merge with stored names to restore nested variables inside
-			// false conditionals, preserving document order and contact-role variants.
-			variables = mergeStoredVariables(variables, filename, lilyFile);
-
-			const conditionalSet = new Set(lilyFile?.conditional_variables ?? []);
-			if (conditionalSet.size > 0) {
-				variables = variables.map((v) =>
-					conditionalSet.has(v.display_name)
-						? { ...v, is_conditional: true }
-						: v,
-				);
-			}
-
-			// Record variable names from this document and resolve
-			// contact variables so derived values are up-to-date.
-			await invoke("set_document_variables", {
-				workingDir,
-				filename,
-				variableNames: variables.map((v) => v.display_name),
-				conditionalNames: variables
-					.filter((v) => v.is_conditional)
-					.map((v) => v.display_name),
-				conditionalDefinitions: {},
-			});
-			await resolveContactVariables(workingDir);
-
-			// Reload .lily to pick up resolved values
-			const updatedLilyFile = await invoke<LilyFile>("load_lily_file_cmd", {
-				workingDir,
-			});
-
-			const savedVars = updatedLilyFile?.variables ?? {};
-			const variableValues: Record<string, string> = {};
-			for (const v of variables) {
-				const defaultVal = v.is_conditional ? "false" : "";
-				variableValues[v.display_name] =
-					savedVars[v.display_name] ?? defaultVal;
-			}
-
-			const docMeta = updatedLilyFile?.documents[filename];
-			if (docMeta?.role_overrides) {
-				for (const override of Object.values(docMeta.role_overrides)) {
-					for (const [varName, value] of Object.entries(override.values)) {
-						variableValues[varName] = value;
-					}
-				}
-			}
-			// Apply per-document variable overrides
-			if (docMeta?.variable_overrides) {
-				for (const [varName, value] of Object.entries(
-					docMeta.variable_overrides,
-				)) {
-					variableValues[varName] = value;
-				}
-			}
-			if (docMeta?.client_key === "b") {
-				applyCoClientValues(updatedLilyFile, variableValues);
-			}
-
-			// Sync current values into the .docx so it reflects the
-			// latest client data without requiring a manual save
-			const settings = useSettingsStore.getState().settings;
-			let templateSchema: VariableSchema | null = null;
 			if (settings.templates_dir && docTemplateRelPath) {
+				let schema: VariableSchema | null = null;
 				try {
-					templateSchema = await invoke<VariableSchema>(
-						"load_template_schema",
+					schema = await invoke<VariableSchema>("load_template_schema", {
+						templatesDir: settings.templates_dir,
+						templateRelPath: docTemplateRelPath,
+					});
+				} catch {
+					// The template may have no sidecar schema; render only if it does.
+				}
+				if (schema && planPathFor(settings.templates_dir, schema)) {
+					await applyDocumentValues(
+						settings.templates_dir,
+						docTemplateRelPath,
+						docPath,
+						schema,
+					);
+					const renderedLilyFile = await invoke<LilyFile>(
+						"load_lily_file_cmd",
 						{
-							templatesDir: settings.templates_dir,
-							templateRelPath: docTemplateRelPath,
+							workingDir,
 						},
 					);
-				} catch {
-					// Schema is optional
+					set({ lilyFile: renderedLilyFile });
 				}
-				await applyDocumentValues(
-					settings.templates_dir,
-					docTemplateRelPath,
-					docPath,
-					templateSchema,
-				);
 			}
-
-			const documentHtml = await invoke<string>("get_document_html", {
-				docxPath: docPath,
-			});
-			// Rendering writes the draft record, so reload the metadata the
-			// editor shows alongside the document.
-			const renderedLilyFile = await invoke<LilyFile>("load_lily_file_cmd", {
-				workingDir,
-			});
-
-			pushNav(get());
-			set({
-				documentPath: docPath,
-				templateRelPath,
-				variables,
-				variableValues,
-				documentHtml,
-				lilyFile: renderedLilyFile,
-				templateSchema,
-				dirty: false,
-				step: "edit-variables",
-				loading: false,
-			});
+			await invoke("open_file_in_os", { filePath: docPath });
+			set({ loading: false });
 		} catch (err) {
 			set({ error: String(err), loading: false });
 			toastError("Failed to open document", err);
 		}
-	},
-
-	renameDocument: async (newFilename) => {
-		const { documentPath } = get();
-		if (!documentPath) return;
-
-		const oldFilename = extractFilename(documentPath);
-		set({ loading: true, error: null });
-		try {
-			const newPath = await invoke<string>("rename_document", {
-				docxPath: documentPath,
-				newFilename,
-			});
-			set({ documentPath: newPath, loading: false });
-			useUndoStore.getState().push({
-				description: `Rename to ${newFilename}`,
-				timestamp: Date.now(),
-				redo: async () => {
-					const { documentPath: dp } = get();
-					if (!dp) return;
-					const np = await invoke<string>("rename_document", {
-						docxPath: dp,
-						newFilename,
-					});
-					set({ documentPath: np });
-				},
-				undo: async () => {
-					const { documentPath: dp } = get();
-					if (!dp) return;
-					const np = await invoke<string>("rename_document", {
-						docxPath: dp,
-						newFilename: oldFilename,
-					});
-					set({ documentPath: np });
-				},
-			});
-		} catch (err) {
-			set({ error: String(err), loading: false });
-			toastError("Failed to rename document", err);
-		}
-	},
-
-	saveDocument: async () => {
-		const {
-			documentPath,
-			variableValues,
-			workingDir,
-			lilyFile,
-			templateRelPath,
-		} = get();
-		if (!documentPath) return;
-
-		set({ loading: true, error: null });
-		try {
-			let templateSchema: VariableSchema | null = null;
-			const settings = useSettingsStore.getState().settings;
-			const docFilename = extractFilename(documentPath);
-			const docTemplateRelPath =
-				templateRelPath ?? lilyFile?.documents[docFilename]?.template_rel_path;
-			if (settings.templates_dir && docTemplateRelPath) {
-				try {
-					templateSchema = await invoke<VariableSchema>(
-						"load_template_schema",
-						{
-							templatesDir: settings.templates_dir,
-							templateRelPath: docTemplateRelPath,
-						},
-					);
-				} catch {
-					// Schema is optional
-				}
-			}
-
-			const filename = extractFilename(documentPath);
-			const docMeta = lilyFile?.documents[filename];
-			if (docMeta?.role_overrides && workingDir) {
-				for (const [role, override] of Object.entries(docMeta.role_overrides)) {
-					const updatedValues = { ...override.values };
-					for (const varName of Object.keys(updatedValues)) {
-						if (variableValues[varName] !== undefined) {
-							updatedValues[varName] = variableValues[varName];
-						}
-					}
-					await invoke("set_role_override", {
-						workingDir,
-						filename,
-						role,
-						overrideData: {
-							contact_id: override.contact_id,
-							values: updatedValues,
-						},
-					});
-				}
-			}
-
-			// Plan templates read from the .lily, so persist the current
-			// document values before rendering.
-			if (templateSchema?.engine === "plan" && workingDir) {
-				const sharedValues = { ...variableValues };
-				if (docMeta?.client_key === "b") {
-					for (const key of CO_CLIENT_VARIABLES) {
-						delete sharedValues[key];
-					}
-				}
-				await invoke("save_client_variables", {
-					workingDir,
-					variableValues: sharedValues,
-				});
-			}
-
-			if (!settings.templates_dir) {
-				throw new Error("Templates directory is not configured");
-			}
-			await applyDocumentValues(
-				settings.templates_dir,
-				docTemplateRelPath ?? "",
-				documentPath,
-				templateSchema,
-			);
-
-			if (workingDir) {
-				const lilyFile = await invoke<LilyFile>("load_lily_file_cmd", {
-					workingDir,
-				});
-				set({ lilyFile });
-			}
-
-			set({ loading: false, dirty: false });
-			toastSuccess("Document saved");
-		} catch (err) {
-			set({ error: String(err), loading: false });
-			toastError("Failed to save document", err);
-		}
-	},
-
-	refreshPreview: async () => {
-		const { documentPath } = get();
-		if (!documentPath) return;
-
-		try {
-			const documentHtml = await invoke<string>("get_document_html", {
-				docxPath: documentPath,
-			});
-			set({ documentHtml });
-		} catch (err) {
-			console.error("Failed to refresh preview:", err);
-		}
-	},
-
-	restoreVersion: async (snapshotPath) => {
-		const { documentPath } = get();
-		if (!documentPath) return;
-		await invoke("restore_document_version", {
-			docxPath: documentPath,
-			snapshotPath,
-		});
-		const documentHtml = await invoke<string>("get_document_html", {
-			docxPath: documentPath,
-		});
-		set({ documentHtml, dirty: false });
 	},
 
 	deleteDocument: async (filename) => {

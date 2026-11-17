@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { invoke } from "@tauri-apps/api/core";
-import { useSettingsStore } from "@/stores/settingsStore";
 import { useToastStore } from "@/stores/toastStore";
 import type { LilyFile } from "@/types";
-import { extractFilename } from "@/utils/path";
-import {
-	loadTemplateVariables,
-	mergeStoredVariables,
-	pushNav,
-} from "./helpers";
+import { pushNav } from "./helpers";
 import type { WorkflowSlice } from "./types";
 
 export const createProjectSlice: WorkflowSlice = (set, get) => ({
@@ -92,14 +86,9 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 		const current = get();
 		const needsLilyReload =
 			entry.workingDir !== current.workingDir && entry.workingDir;
-		const needsDocReload =
-			entry.documentPath && entry.documentPath !== current.documentPath;
-
 		set({
 			step: entry.step,
 			workingDir: entry.workingDir,
-			documentPath: entry.documentPath,
-			templateRelPath: entry.templateRelPath,
 		});
 
 		if (needsLilyReload) {
@@ -110,65 +99,6 @@ export const createProjectSlice: WorkflowSlice = (set, get) => ({
 				set({ lilyFile });
 			} catch (err) {
 				console.error("Failed to reload .lily file:", err);
-			}
-		}
-
-		if (needsDocReload && entry.step === "edit-variables") {
-			try {
-				const documentHtml = await invoke<string>("get_document_html", {
-					docxPath: entry.documentPath,
-				});
-				const templatesDir = useSettingsStore.getState().settings.templates_dir;
-				let variables =
-					templatesDir && entry.templateRelPath
-						? await loadTemplateVariables(templatesDir, entry.templateRelPath)
-						: [];
-				const { lilyFile } = get();
-
-				// Merge with stored names to restore nested variables inside
-				// false conditionals, preserving document order and contact-role variants.
-				const filename = entry.documentPath
-					? extractFilename(entry.documentPath)
-					: "";
-				variables = mergeStoredVariables(variables, filename, lilyFile);
-
-				const conditionalSet = new Set(lilyFile?.conditional_variables ?? []);
-				if (conditionalSet.size > 0) {
-					variables = variables.map((v) =>
-						conditionalSet.has(v.display_name)
-							? { ...v, is_conditional: true }
-							: v,
-					);
-				}
-				const savedVars = lilyFile?.variables ?? {};
-				const variableValues: Record<string, string> = {};
-				for (const v of variables) {
-					const defaultVal = v.is_conditional ? "false" : "";
-					variableValues[v.display_name] =
-						savedVars[v.display_name] ?? defaultVal;
-				}
-
-				// Apply per-document role overrides
-				const docMeta = lilyFile?.documents[filename];
-				if (docMeta?.role_overrides) {
-					for (const ro of Object.values(docMeta.role_overrides)) {
-						for (const [varName, value] of Object.entries(ro.values)) {
-							variableValues[varName] = value;
-						}
-					}
-				}
-				// Apply per-document variable overrides
-				if (docMeta?.variable_overrides) {
-					for (const [varName, value] of Object.entries(
-						docMeta.variable_overrides,
-					)) {
-						variableValues[varName] = value;
-					}
-				}
-
-				set({ documentHtml, variables, variableValues, dirty: false });
-			} catch (err) {
-				console.error("Failed to reload document:", err);
 			}
 		}
 	},

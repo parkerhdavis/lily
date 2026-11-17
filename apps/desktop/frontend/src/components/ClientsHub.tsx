@@ -510,21 +510,6 @@ function ClientContentPane({
 		[settings.templates_dir, onDeleteDocument, onAddMultipleDocuments],
 	);
 
-	const handleEditInDocx = useCallback(
-		async (filename: string) => {
-			try {
-				await invoke("open_file_in_os", {
-					filePath: `${workingDir}/${filename}`,
-				});
-			} catch (err) {
-				useToastStore
-					.getState()
-					.addToast("error", `Failed to open document: ${err}`);
-			}
-		},
-		[workingDir],
-	);
-
 	const handleExport = async () => {
 		const folderName = extractFolderName(workingDir);
 		const path = await saveDialog({
@@ -758,7 +743,6 @@ function ClientContentPane({
 												doc={doc}
 												isMissing={missingOnDisk.has(doc.filename)}
 												onOpen={onOpenDocument}
-												onEditInDocx={handleEditInDocx}
 												onDelete={onDeleteDocument}
 												onNewVersion={onNewVersionDocument}
 												onNewVersionMissing={handleNewVersionMissing}
@@ -799,7 +783,6 @@ function DocumentRow({
 	doc,
 	isMissing,
 	onOpen,
-	onEditInDocx,
 	onDelete,
 	onNewVersion,
 	onNewVersionMissing,
@@ -808,7 +791,6 @@ function DocumentRow({
 	doc: ClientDoc;
 	isMissing?: boolean;
 	onOpen: (filename: string, templateRelPath: string) => void;
-	onEditInDocx: (filename: string) => Promise<void>;
 	onDelete: (filename: string) => Promise<void>;
 	onNewVersion: (filename: string) => Promise<void>;
 	onNewVersionMissing: (
@@ -893,23 +875,12 @@ function DocumentRow({
 						onClick={() => onOpen(doc.filename, doc.templateRelPath)}
 						disabled={isMissing}
 						title={
-							isMissing ? "File is missing on disk" : "Open in Lily editor"
-						}
-					>
-						Edit in Lily
-					</button>
-					<button
-						type="button"
-						className="btn btn-sm btn-ghost"
-						onClick={() => onEditInDocx(doc.filename)}
-						disabled={isMissing}
-						title={
 							isMissing
 								? "File is missing on disk"
-								: "Open .docx in default app"
+								: "Render the document and open it in Word"
 						}
 					>
-						Edit in Docx
+						Open in Word
 					</button>
 				</div>
 			</div>

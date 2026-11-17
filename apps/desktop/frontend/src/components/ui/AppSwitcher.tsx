@@ -6,11 +6,7 @@ import type { WorkflowStep } from "@/types";
 import { extractFolderName } from "@/utils/path";
 
 /** Steps that belong to the client management branch. */
-const CLIENT_STEPS = new Set<WorkflowStep>([
-	"clients",
-	"select-template",
-	"edit-variables",
-]);
+const CLIENT_STEPS = new Set<WorkflowStep>(["clients", "select-template"]);
 
 /**
  * App switcher dropdown (like Google's grid icon).

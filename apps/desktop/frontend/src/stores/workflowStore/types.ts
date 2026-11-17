@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { NavigationEntry } from "@/stores/navigationStore";
 import type {
-	Contact,
-	ContactBinding,
 	LilyFile,
-	RoleOverride,
-	VariableInfo,
-	VariableSchema,
 	WorkflowStage,
 	WorkflowStep,
 	WorkflowWaitingOn,
@@ -15,16 +10,8 @@ import type {
 export interface WorkflowState {
 	step: WorkflowStep;
 	workingDir: string | null;
-	documentPath: string | null;
-	documentHtml: string;
-	variables: VariableInfo[];
-	variableValues: Record<string, string>;
 	templates: string[];
-	templateRelPath: string | null;
 	lilyFile: LilyFile | null;
-	/** Variable schema from the template's sidecar .lily file. */
-	templateSchema: VariableSchema | null;
-	dirty: boolean;
 	loading: boolean;
 	error: string | null;
 
@@ -46,31 +33,9 @@ export interface WorkflowState {
 		templatesDir: string,
 	) => Promise<void>;
 	setRequiredDocuments: (templateRelPaths: string[]) => Promise<void>;
-	renameDocument: (newFilename: string) => Promise<void>;
-	saveDocument: () => Promise<void>;
-	restoreVersion: (snapshotPath: string) => Promise<void>;
-	refreshPreview: () => Promise<void>;
 	deleteDocument: (filename: string) => Promise<void>;
 	newVersionDocument: (filename: string) => Promise<void>;
 	openTemplateFile: (templateRelPath: string) => Promise<void>;
-
-	// Variable actions
-	updateVariable: (name: string, value: string) => void;
-	saveClientVariable: (name: string, value: string) => Promise<void>;
-	addClientVariable: (name: string) => Promise<void>;
-	removeClientVariable: (name: string) => Promise<void>;
-
-	// Contact actions
-	addContact: (contact: Omit<Contact, "id">) => Promise<Contact>;
-	updateContact: (contact: Contact) => Promise<void>;
-	deleteContact: (contactId: string) => Promise<void>;
-	setContactBinding: (role: string, binding: ContactBinding) => Promise<void>;
-	clearContactBinding: (role: string) => Promise<void>;
-	resolveContactBindings: () => Promise<void>;
-	setRoleOverride: (
-		role: string,
-		overrideData: RoleOverride | null,
-	) => Promise<void>;
 
 	// Project actions
 	setWorkingDir: (dir: string) => void;

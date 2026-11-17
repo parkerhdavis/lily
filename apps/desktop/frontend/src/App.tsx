@@ -10,11 +10,9 @@ import ErrorBoundary from "@/components/ui/ErrorBoundary";
 import KeyboardShortcutsModal from "@/components/ui/KeyboardShortcutsModal";
 import StatusBar from "@/components/ui/StatusBar";
 import ToastContainer from "@/components/ui/ToastContainer";
-import VariableEditor from "@/components/VariableEditor";
 import { useLilyIcon } from "@/hooks/useLilyIcon";
 import { useNavigationStore } from "@/stores/navigationStore";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { useUndoStore } from "@/stores/undoStore";
 import { useWorkflowStore } from "@/stores/workflowStore";
 
 export default function App() {
@@ -92,30 +90,6 @@ export default function App() {
 		return () => window.removeEventListener("keydown", handleNav);
 	}, []);
 
-	// Global undo/redo shortcuts: Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
-	useEffect(() => {
-		const handleUndo = (e: KeyboardEvent) => {
-			if (!(e.ctrlKey || e.metaKey)) return;
-			// Don't intercept when focus is in a text input (let browser handle it)
-			const tag = (e.target as HTMLElement)?.tagName;
-			if (tag === "INPUT" || tag === "TEXTAREA") return;
-
-			if (e.key === "z" && !e.shiftKey) {
-				e.preventDefault();
-				useUndoStore.getState().undo();
-			} else if (
-				e.key === "y" ||
-				(e.key === "z" && e.shiftKey) ||
-				(e.key === "Z" && e.shiftKey)
-			) {
-				e.preventDefault();
-				useUndoStore.getState().redo();
-			}
-		};
-		window.addEventListener("keydown", handleUndo);
-		return () => window.removeEventListener("keydown", handleUndo);
-	}, []);
-
 	// Splash: hold until settings have loaded AND the window is actually on-screen,
 	// then run the minimum display time before fading out. Gating on `revealed`
 	// (not just `loaded`) keeps the splash's full dwell measured from when it is
@@ -155,8 +129,6 @@ export default function App() {
 				return <ClientsHub />;
 			case "select-template":
 				return <TemplatePicker />;
-			case "edit-variables":
-				return <VariableEditor />;
 			case "app-settings":
 				return <AppSettings />;
 			case "pipeline":

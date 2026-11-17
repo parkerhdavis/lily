@@ -11,7 +11,7 @@ import type { ClientSummary, PersistedNavEntry } from "@/types";
 import { extractFolderName } from "@/utils/path";
 
 /** Steps that operate on an individual client (require a working dir). */
-const CLIENT_STEPS = new Set(["clients", "select-template", "edit-variables"]);
+const CLIENT_STEPS = new Set(["clients", "select-template"]);
 
 function describeLastStep(step: string, dirName: string | null): string {
 	if (step === "clients") return "Clients";
@@ -116,8 +116,11 @@ export default function LilyHub() {
 		const { last_step, last_working_dir } = settings;
 		return history
 			.filter((e) => {
-				// Exclude hub entries
-				if (e.step === "hub") return false;
+				// Only steps this version can navigate to; older persisted
+				// history may name a step it cannot open.
+				if (e.step !== "pipeline" && e.step !== "app-settings") {
+					if (!CLIENT_STEPS.has(e.step)) return false;
+				}
 				// Exclude the "resume" entry (already shown separately)
 				if (
 					last_step &&
